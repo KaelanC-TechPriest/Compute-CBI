@@ -396,44 +396,136 @@ def to_5070_clip(ds, geometry):
 
 # =========================================================================== main
 def main() -> int:
-    p = argparse.ArgumentParser(description="One-shot CBI for one MTBS perimeter.")
+    p = argparse.ArgumentParser(
+        description="One-shot CBI for one MTBS perimeter OR all fires in a given year."
+    )
     p.add_argument("--gpkg", required=True)
     sel = p.add_mutually_exclusive_group()
     sel.add_argument("--event-id", default=None,
                      help="MTBS Event_ID (default: first wildfire).")
     sel.add_argument("--index", type=int, default=None,
                      help="0-based row index in the gpkg layer.")
-    p.add_argument("--layer", default=None)
+    p.add_argument("--layer", default=None,
+                   help="Layer name in the gpkg (default: first layer).")
     p.add_argument("--out-dir", required=True)
     p.add_argument("--max-cloud", type=float, default=DEFAULT_MAX_CLOUD)
     p.add_argument("--model", default=str(MODEL_PATH))
     p.add_argument("--def", dest="def_tif", default=str(DEF_TIF))
     p.add_argument("--csv", default=str(TRAIN_CSV))
+    
+    # NEW: Optional year for batch processing
+    p.add_argument("--year", type=int, default=None,
+                   help="If provided, process ALL wildfires from this year "
+                        "(overrides --event-id and --index).")
+
     args = p.parse_args()
 
+    # Always ensure model and def raster once (outside any loop)
     bundle = ensure_model(Path(args.model), Path(args.csv))
     def_path = ensure_def(Path(args.def_tif), DEF_NC)
-    fire = read_perimeter(args.gpkg, args.event_id, args.index, args.layer)
-    print(f"fire={fire['fire_id']} state={fire['state']} year={fire['year']} "
-          f"DOY=[{fire['start_day']},{fire['end_day']}]", flush=True)
 
-    cube = fetch_landsat(fire["bbox"], fire["year"], fire["start_day"],
-                         fire["end_day"], args.max_cloud)
-    comp = composite(cube, fire["year"])
-    stack = build_stack(comp, def_path)
-    ds = predict(stack, bundle)
-    ds = to_5070_clip(ds, fire["geometry"])
+    out_base = Path(args.out_dir)
 
-    cbi = ds["CBI"].values
-    print(f"out: grid={ds.sizes['y']}x{ds.sizes['x']} crs={ds.rio.crs} "
-          f"valid_px={int(np.isfinite(cbi).sum())} "
-          f"CBI med={np.nanmedian(cbi):.2f} max={np.nanmax(cbi):.2f}", flush=True)
-    out = Path(args.out_dir)
-    out.mkdir(parents=True, exist_ok=True)
-    for name in ("CBI", "CBI_bc"):
-        ds[name].rio.to_raster(out / f"{fire['fire_id']}_{name}.tif",
-                               tiled=True, compress="ZSTD", zstd_level=1)
-    print(f"wrote {fire['fire_id']}_CBI.tif, _CBI_bc.tif to {out}", flush=True)
+    if args.year is not None:
+        # ====================== BATCH MODE: All fires in one year ======================
+        print(f"Batch mode: Processing all wildfires in year {args.year}", flush=True)
+        
+        # Load the layer once
+        gdf = gpd.read_file(args.gpkg, layer=args.layer).to_crs(5070)
+        
+        # Filter to wildfires in the requested year (using the schema you provided)
+        gdf = gdf[gdf["Incid_Type"] == WILDFIRE_CODE]
+        gdf = gdf[gdf["Ig_Date"].dt.year == args.year]
+        
+        if gdf.empty:
+            print(f"No wildfires found for year {args.year}", flush=True)
+            return 0
+
+        print(f"Found {len(gdf)} wildfires in {args.year}", flush=True)
+
+        # Create year-specific output folder
+        year_dir = out_base / str(args.year)
+        year_dir.mkdir(parents=True, exist_ok=True)
+
+        for i, (_, row) in enumerate(gdf.iterrows(), start=1):
+            try:
+                fire_id = row["Event_ID"]
+                state = str(fire_id)[:2].upper()
+                
+                if state not in STATE_WINDOWS:
+                    print(f"Skipping {fire_id}: no image-season window for state {state}")
+                    continue
+
+                sd, ed = STATE_WINDOWS[state]
+                geom = row.geometry
+                minx, miny, maxx, maxy = geom.bounds
+                b = 1000.0
+                bbox = transform_bounds(
+                    "EPSG:5070", "EPSG:4326",
+                    minx - b, miny - b, maxx + b, maxy + b
+                )
+
+                fire = {
+                    "fire_id": fire_id,
+                    "state": state,
+                    "year": args.year,
+                    "start_day": sd,
+                    "end_day": ed,
+                    "geometry": geom,
+                    "bbox": bbox,
+                }
+
+                print(f"[{i}/{len(gdf)}] Processing {fire_id} ...", flush=True)
+
+                cube = fetch_landsat(fire["bbox"], fire["year"], fire["start_day"],
+                                     fire["end_day"], args.max_cloud)
+                comp = composite(cube, fire["year"])
+                stack = build_stack(comp, def_path)
+                ds = predict(stack, bundle)
+                ds = to_5070_clip(ds, fire["geometry"])
+
+                # Write to year subfolder
+                for name in ("CBI", "CBI_bc"):
+                    ds[name].rio.to_raster(
+                        year_dir / f"{fire['fire_id']}_{name}.tif",
+                        tiled=True, compress="ZSTD", zstd_level=1
+                    )
+
+                cbi = ds["CBI"].values
+                print(f"  → Done: {ds.sizes['y']}x{ds.sizes['x']} grid, "
+                      f"valid pixels = {int(np.isfinite(cbi).sum())}", flush=True)
+
+            except Exception as e:
+                print(f"  → Failed on {fire_id}: {e}", flush=True)
+                continue
+
+        print(f"Batch processing for year {args.year} completed.", flush=True)
+
+    else:
+        # ====================== ORIGINAL ONE-SHOT MODE ======================
+        fire = read_perimeter(args.gpkg, args.event_id, args.index, args.layer)
+        print(f"fire={fire['fire_id']} state={fire['state']} year={fire['year']} "
+              f"DOY=[{fire['start_day']},{fire['end_day']}]", flush=True)
+
+        cube = fetch_landsat(fire["bbox"], fire["year"], fire["start_day"],
+                             fire["end_day"], args.max_cloud)
+        comp = composite(cube, fire["year"])
+        stack = build_stack(comp, def_path)
+        ds = predict(stack, bundle)
+        ds = to_5070_clip(ds, fire["geometry"])
+
+        cbi = ds["CBI"].values
+        print(f"out: grid={ds.sizes['y']}x{ds.sizes['x']} crs={ds.rio.crs} "
+              f"valid_px={int(np.isfinite(cbi).sum())} "
+              f"CBI med={np.nanmedian(cbi):.2f} max={np.nanmax(cbi):.2f}", flush=True)
+
+        out = Path(args.out_dir)
+        out.mkdir(parents=True, exist_ok=True)
+        for name in ("CBI", "CBI_bc"):
+            ds[name].rio.to_raster(out / f"{fire['fire_id']}_{name}.tif",
+                                   tiled=True, compress="ZSTD", zstd_level=1)
+        print(f"wrote {fire['fire_id']}_CBI.tif, _CBI_bc.tif to {out}", flush=True)
+
     return 0
 
 
