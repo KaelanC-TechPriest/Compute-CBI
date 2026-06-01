@@ -51,6 +51,7 @@ MODEL_PATH = REPO / "data/model/cbi_rf.joblib"
 DEF_TIF = REPO / "data/terraclimate/def_19812010_annual.tif"
 DEF_NC = REPO / "data/terraclimate/TerraClimate_19812010_def.nc"
 TRAIN_CSV = REPO / "parks_2019/data/data_for_ee_model.csv"
+LANDSAT_CACHE = REPO / "data/landsat_cache"
 
 # --------------------------------------------------------------------------- model
 PREDICTORS = ["def", "lat", "rbr", "dmirbi", "dndvi", "post_mirbi"]
@@ -203,6 +204,46 @@ def fire_grid(bbox):
 
 
 # ====================================================================== landsat
+_scene_cache_stats = {"hits": 0, "misses": 0}
+
+
+def get_scene_cache_path(cache_dir: Path, item) -> Path:
+    scene_id = item.properties.get("landsat:scene_id") or item.id
+    return cache_dir / "scenes" / f"{scene_id}.tif"
+
+
+def load_or_download_scene(item, cache_dir: Path, grid, force_refresh: bool):
+    """Return processed scene for the fire grid, loading from cache when possible."""
+    g_epsg, g_tr, g_w, g_h = grid
+    cache_path = get_scene_cache_path(cache_dir, item)
+    scene_id = item.properties.get("landsat:scene_id") or item.id
+    print(f"  [cache] scene={scene_id}", flush=True)
+    print(f"  [cache] path={cache_path}", flush=True)
+    print(f"  [cache] file_exists={cache_path.is_file()}", flush=True)
+
+    if not force_refresh and cache_path.is_file():
+        with rasterio.open(cache_path) as ds:
+            cached_epsg = ds.crs.to_epsg() if ds.crs is not None else None
+            cached_tr = ds.transform
+            epsg_match = cached_epsg == g_epsg
+            tr_match = cached_tr == g_tr
+            print(f"  [cache] epsg: want={g_epsg}, got={cached_epsg}, match={epsg_match}", flush=True)
+            print(f"  [cache] transform: want={g_tr}, got={cached_tr}, match={tr_match}", flush=True)
+            if ds.crs is not None and epsg_match and tr_match:
+                _scene_cache_stats["hits"] += 1
+                da = rioxarray.open_rasterio(cache_path, masked=True)
+                return da.assign_coords(band=OPTICAL).drop_vars("spatial_ref", errors="ignore")
+            else:
+                print(f"  [cache] MISS reason: crs_none={ds.crs is None}, epsg_match={epsg_match}, tr_match={tr_match}", flush=True)
+
+    _scene_cache_stats["misses"] += 1
+    result = _item_window(item, grid)
+    if result is not None:
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        result.rio.write_crs(f"EPSG:{g_epsg}").rio.to_raster(cache_path, tiled=True, compress="ZSTD", zstd_level=1)
+    return result
+
+
 def _search(bbox, start, end, max_cloud, start_day, end_day):
     cat = pystac_client.Client.open(STAC_URL, modifier=planetary_computer.sign_inplace)
     items = list(cat.search(
@@ -264,13 +305,17 @@ def _item_window(item, grid):
     return out.drop_vars("spatial_ref", errors="ignore")
 
 
-def fetch_landsat(bbox, year, start_day, end_day, max_cloud):
+def fetch_landsat(bbox, year, start_day, end_day, max_cloud,
+                  landsat_cache: Path | None = None, force_refresh: bool = False):
     grid = fire_grid(bbox)
     items = _search(bbox, f"{year - 2}-01-01", f"{year + 3}-01-01",
                     max_cloud, start_day, end_day)
     arrs = []
     for it in items:
-        a = _item_window(it, grid)
+        if landsat_cache is not None:
+            a = load_or_download_scene(it, landsat_cache, grid, force_refresh)
+        else:
+            a = _item_window(it, grid)
         if a is not None:
             arrs.append(a.assign_coords(time=it.datetime).expand_dims("time"))
     if not arrs:
@@ -419,10 +464,23 @@ def main() -> int:
     p.add_argument("--year", type=int, default=None,
                    help="If provided, process ALL wildfires from this year "
                         "(overrides --event-id and --index).")
+    p.add_argument("--landsat-cache", default=str(LANDSAT_CACHE),
+                   help="Directory for cached Landsat scenes (default: data/landsat_cache).")
+    p.add_argument("--force-refresh", action="store_true",
+                   help="Ignore cached scenes and re-download.")
+    p.add_argument("--clear-cache", action="store_true",
+                   help="Delete all cached Landsat scenes before running.")
 
     args = p.parse_args()
 
     start_time = time.perf_counter()
+
+    landsat_cache = Path(args.landsat_cache)
+    if args.clear_cache and landsat_cache.exists():
+        import shutil
+        shutil.rmtree(landsat_cache)
+        print(f"cache: cleared {landsat_cache}", flush=True)
+    landsat_cache.mkdir(parents=True, exist_ok=True)
 
     # Always ensure model and def raster once (outside any loop)
     bundle = ensure_model(Path(args.model), Path(args.csv))
@@ -459,7 +517,7 @@ def main() -> int:
         print(f"No wildfires found for year {args.year}, id {args.event_id}, index {args.index}", flush=True)
         return 0
 
-    print(f"Found {len(gdf)} wildfires{" in " + args.year if args.year is not None else ""}.", flush=True)
+    print(f"Found {len(gdf)} wildfires{" in " + str(args.year) if args.year is not None else ""}.", flush=True)
 
     for i, (_, row) in enumerate(gdf.iterrows(), start=1):
         try:
@@ -492,7 +550,9 @@ def main() -> int:
             print(f"[{i}/{len(gdf)}] Processing {fire_id} ...", flush=True)
 
             cube = fetch_landsat(fire["bbox"], fire["year"], fire["start_day"],
-                                 fire["end_day"], args.max_cloud)
+                                 fire["end_day"], args.max_cloud,
+                                 landsat_cache=landsat_cache,
+                                 force_refresh=args.force_refresh)
             comp = composite(cube, fire["year"])
             stack = build_stack(comp, def_path)
             ds = predict(stack, bundle)
@@ -510,12 +570,16 @@ def main() -> int:
                 f"valid pixels = {int(np.isfinite(cbi).sum())}, "
                 f"grid={ds.sizes['y']}x{ds.sizes['x']} crs={ds.rio.crs} "
                 f"CBI med={np.nanmedian(cbi):.2f} max={np.nanmax(cbi):.2f}", flush=True)
+            print(f"  → Cache: {_scene_cache_stats['hits']} hits, "
+                  f"{_scene_cache_stats['misses']} misses", flush=True)
+            _scene_cache_stats["hits"] = 0
+            _scene_cache_stats["misses"] = 0
 
         except Exception as e:
             print(f"  → Failed on {fire_id}: {type(e).__name__}: {e}\n{traceback.format_exc()}", flush=True)
             continue
 
-    print(f"Processing{" for year " + args.year if args.year else ""} completed.", flush=True)
+    print(f"Processing{" for year " + str(args.year) if args.year else ""} completed.", flush=True)
 
     print(f"Finished in {(time.perf_counter() - start_time) / 60:.2f} minutes.")
     return 0

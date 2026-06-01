@@ -58,3 +58,7 @@ is the expected signal for a real forested wildfire.
   low/unreliable CBI — the model was built on forested CBI plots.
 - Selecting a perimeter by `--index`/`--event-id` runs it regardless of fire type;
   the default-first-wildfire behavior only applies when neither is given.
+
+# ROADMAP
+
+06/01/2026 - Caching is getting successful hits when running the same file twice.
