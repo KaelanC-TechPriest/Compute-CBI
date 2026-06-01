@@ -216,25 +216,12 @@ def load_or_download_scene(item, cache_dir: Path, grid, force_refresh: bool):
     """Return processed scene for the fire grid, loading from cache when possible."""
     g_epsg, g_tr, g_w, g_h = grid
     cache_path = get_scene_cache_path(cache_dir, item)
-    scene_id = item.properties.get("landsat:scene_id") or item.id
-    print(f"  [cache] scene={scene_id}", flush=True)
-    print(f"  [cache] path={cache_path}", flush=True)
-    print(f"  [cache] file_exists={cache_path.is_file()}", flush=True)
-
     if not force_refresh and cache_path.is_file():
         with rasterio.open(cache_path) as ds:
-            cached_epsg = ds.crs.to_epsg() if ds.crs is not None else None
-            cached_tr = ds.transform
-            epsg_match = cached_epsg == g_epsg
-            tr_match = cached_tr == g_tr
-            print(f"  [cache] epsg: want={g_epsg}, got={cached_epsg}, match={epsg_match}", flush=True)
-            print(f"  [cache] transform: want={g_tr}, got={cached_tr}, match={tr_match}", flush=True)
-            if ds.crs is not None and epsg_match and tr_match:
+            if ds.crs is not None and ds.crs.to_epsg() == g_epsg and ds.transform == g_tr:
                 _scene_cache_stats["hits"] += 1
                 da = rioxarray.open_rasterio(cache_path, masked=True)
                 return da.assign_coords(band=OPTICAL).drop_vars("spatial_ref", errors="ignore")
-            else:
-                print(f"  [cache] MISS reason: crs_none={ds.crs is None}, epsg_match={epsg_match}, tr_match={tr_match}", flush=True)
 
     _scene_cache_stats["misses"] += 1
     result = _item_window(item, grid)
@@ -464,7 +451,7 @@ def main() -> int:
     p.add_argument("--year", type=int, default=None,
                    help="If provided, process ALL wildfires from this year "
                         "(overrides --event-id and --index).")
-    p.add_argument("--landsat-cache", default=str(LANDSAT_CACHE),
+    p.add_argument("--landsat-cache", default=None,
                    help="Directory for cached Landsat scenes (default: data/landsat_cache).")
     p.add_argument("--force-refresh", action="store_true",
                    help="Ignore cached scenes and re-download.")
@@ -475,12 +462,14 @@ def main() -> int:
 
     start_time = time.perf_counter()
 
-    landsat_cache = Path(args.landsat_cache)
-    if args.clear_cache and landsat_cache.exists():
-        import shutil
-        shutil.rmtree(landsat_cache)
-        print(f"cache: cleared {landsat_cache}", flush=True)
-    landsat_cache.mkdir(parents=True, exist_ok=True)
+    landsat_cache = None
+    if args.landsat_cache is not None:
+        landsat_cache = Path(args.landsat_cache)
+        if args.clear_cache and landsat_cache.exists():
+            import shutil
+            shutil.rmtree(landsat_cache)
+            print(f"cache: cleared {landsat_cache}", flush=True)
+        landsat_cache.mkdir(parents=True, exist_ok=True)
 
     # Always ensure model and def raster once (outside any loop)
     bundle = ensure_model(Path(args.model), Path(args.csv))
@@ -570,8 +559,11 @@ def main() -> int:
                 f"valid pixels = {int(np.isfinite(cbi).sum())}, "
                 f"grid={ds.sizes['y']}x{ds.sizes['x']} crs={ds.rio.crs} "
                 f"CBI med={np.nanmedian(cbi):.2f} max={np.nanmax(cbi):.2f}", flush=True)
-            print(f"  → Cache: {_scene_cache_stats['hits']} hits, "
-                  f"{_scene_cache_stats['misses']} misses", flush=True)
+
+            if landsat_cache is not None:
+                print(f"  → Cache: {_scene_cache_stats['hits']} hits, "
+                    f"{_scene_cache_stats['misses']} misses", flush=True)
+
             _scene_cache_stats["hits"] = 0
             _scene_cache_stats["misses"] = 0
 
