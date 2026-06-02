@@ -74,7 +74,6 @@ is the expected signal for a real forested wildfire.
 
 Testing on all fires in data/fire_perims/test.gpkg in the year 2019.
 
-| Normal | Caching (empty cache) | Caching (second run) |
-| --------------- | --------------- | --------------- |
-| ~8 minutes | ~18 minutes | 0.19 minutes |
-
+| Year | Normal | Caching (empty) | Caching (full) |
+| --------------- | --------------- | --------------- | --------------- |
+| 2019 | ~18.07 minutes | ~17.95 minutes | 0.19 minutes |
