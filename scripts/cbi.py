@@ -113,7 +113,7 @@ def ensure_model(model_path: Path, csv_path: Path) -> dict:
     model = RandomForestRegressor(
         n_estimators=N_TREES,
         min_samples_leaf=int(round(len(X) / 75 / len(PREDICTORS))),
-        max_features="sqrt", random_state=SEED, n_jobs=-1, oob_score=True,
+        max_features="sqrt", random_state=SEED, n_jobs=-1, oob_score=True,  # type: ignore[arg-type]
     ).fit(X, y)
     bundle = {
         "model": model, "predictors": PREDICTORS, "target": TARGET,
@@ -146,7 +146,7 @@ def ensure_def(def_tif: Path, def_nc: Path) -> Path:
         tmp.replace(def_nc)
     print("def: summing 12 monthly normals -> annual", flush=True)
     ds = xr.open_dataset(def_nc)
-    annual = np.floor(ds["def"].sum("time", skipna=False)).fillna(NODATA_DEF).astype("int16")
+    annual = np.floor(ds["def"].sum("time", skipna=False)).fillna(NODATA_DEF).astype("int16")  # type: ignore[union-attr]
     annual = annual.rio.set_spatial_dims(x_dim="lon", y_dim="lat")
     annual = annual.rio.write_crs("EPSG:4326").rio.write_nodata(NODATA_DEF)
     ds.close()
@@ -221,7 +221,7 @@ def load_or_download_scene(item, cache_dir: Path, grid, force_refresh: bool):
             if ds.crs is not None and ds.crs.to_epsg() == g_epsg and ds.transform == g_tr:
                 _scene_cache_stats["hits"] += 1
                 da = rioxarray.open_rasterio(cache_path, masked=True)
-                return da.assign_coords(band=OPTICAL).drop_vars("spatial_ref", errors="ignore")
+                return da.assign_coords(band=OPTICAL).drop_vars("spatial_ref", errors="ignore") # type: ignore[union-attr]
 
     _scene_cache_stats["misses"] += 1
     result = _item_window(item, grid)
@@ -239,8 +239,8 @@ def _search(bbox, start, end, max_cloud, start_day, end_day):
     ).items())
     if start_day is not None:
         items = [it for it in items
-                 if start_day <= it.datetime.timetuple().tm_yday <= end_day]
-    items.sort(key=lambda it: it.datetime)
+                 if it.datetime is not None and start_day <= it.datetime.timetuple().tm_yday <= end_day]
+    items.sort(key=lambda it: it.datetime or datetime.min)
     return items
 
 
@@ -265,11 +265,11 @@ def _item_window(item, grid):
     r1 = min(H, math.ceil((miny - A.f) / A.e))
     if c1 <= c0 or r1 <= r0:
         return None
-    win = Window(c0, r0, c1 - c0, r1 - r0)
-    wtr = A * Affine.translation(c0, r0)
+    win = Window(c0, r0, c1 - c0, r1 - r0)  # type: ignore[call-arg]
+    wtr: Affine = A * Affine.translation(c0, r0)  # type: ignore[assignment]
 
     arr = {}
-    with rasterio.Env(**_GDAL_ENV):
+    with rasterio.Env(**_GDAL_ENV):  # type: ignore[arg-type]
         for band in BANDS:
             with rasterio.open(item.assets[band].href) as ds:
                 arr[band] = ds.read(1, window=win)
@@ -364,7 +364,7 @@ def build_stack(comp, def_path):
     post_mirbi = _trunc(post.sel(index="mirbi") * 1000.0)
 
     grid = rbr
-    da = rioxarray.open_rasterio(def_path, masked=True).squeeze("band", drop=True)
+    da = rioxarray.open_rasterio(def_path, masked=True).squeeze("band", drop=True)  # type: ignore[union-attr]
     defp = da.rio.reproject_match(grid, resampling=Resampling.nearest).load()
     da.close()
 
@@ -486,7 +486,7 @@ def main() -> int:
 
         # Filter to wildfires in the requested year
         gdf = gdf[gdf["Incid_Type"] == WILDFIRE_CODE]
-        gdf = gdf[gdf["Ig_Date"].dt.year == args.year]
+        gdf = gdf[gdf["Ig_Date"].dt.year == args.year]  # type: ignore[union-attr]
 
         # Create year-specific output folder
         out_base = out_base / str(args.year)
@@ -494,21 +494,22 @@ def main() -> int:
 
     if args.event_id is not None:
         gdf = gdf[gdf["Event_ID"] == args.event_id]
-        if gdf.empty:
-            raise SystemExit(f"event-id {event_id} not found in {gpkg}")
+        if gdf.empty:  # type: ignore[union-attr]
+            raise SystemExit(f"event-id {args.event_id} not found in {args.gpkg}")
 
     elif args.index is not None:
         if not 0 <= args.index < len(gdf):
-            raise SystemExit(f"index {index} out of range (0..{len(gdf) - 1})")
-        gdf = gdf.iloc[args.index]
+            raise SystemExit(f"index {args.index} out of range (0..{len(gdf) - 1})")
+        gdf = gdf.iloc[args.index]  # type: ignore[union-attr]
 
-    if gdf.empty:
+    if gdf.empty:  # type: ignore[union-attr]
         print(f"No wildfires found for year {args.year}, id {args.event_id}, index {args.index}", flush=True)
         return 0
 
     print(f"Found {len(gdf)} wildfires{" in " + str(args.year) if args.year is not None else ""}.", flush=True)
 
-    for i, (_, row) in enumerate(gdf.iterrows(), start=1):
+    for i, (_, row) in enumerate(gdf.iterrows(), start=1):  # type: ignore[union-attr]
+        fire_id = "<unknown>"
         try:
             fire_id = row["Event_ID"]
             state = str(fire_id)[:2].upper()
@@ -529,7 +530,7 @@ def main() -> int:
             fire = {
                 "fire_id": fire_id,
                 "state": state,
-                "year": args.year if args.year is not None else int(row["Ig_Date"].year),
+                "year": args.year if args.year is not None else int(row["Ig_Date"].year),  # type: ignore[union-attr]
                 "start_day": sd,
                 "end_day": ed,
                 "geometry": geom,
