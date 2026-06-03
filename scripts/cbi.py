@@ -25,6 +25,7 @@ import sys
 import traceback
 import warnings
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -204,31 +205,28 @@ def fire_grid(bbox):
 
 
 # ====================================================================== landsat
-_scene_cache_stats = {"hits": 0, "misses": 0}
-
-
 def get_scene_cache_path(cache_dir: Path, item) -> Path:
     scene_id = item.properties.get("landsat:scene_id") or item.id
     return cache_dir / "scenes" / f"{scene_id}.tif"
 
 
 def load_or_download_scene(item, cache_dir: Path, grid, force_refresh: bool):
-    """Return processed scene for the fire grid, loading from cache when possible."""
+    """Return (processed scene | None, cache_hit: bool) for the fire grid."""
     g_epsg, g_tr, g_w, g_h = grid
     cache_path = get_scene_cache_path(cache_dir, item)
     if not force_refresh and cache_path.is_file():
         with rasterio.open(cache_path) as ds:
             if ds.crs is not None and ds.crs.to_epsg() == g_epsg and ds.transform == g_tr:
-                _scene_cache_stats["hits"] += 1
                 da = rioxarray.open_rasterio(cache_path, masked=True)
-                return da.assign_coords(band=OPTICAL).drop_vars("spatial_ref", errors="ignore") # type: ignore[union-attr]
+                return da.assign_coords(band=OPTICAL).drop_vars("spatial_ref", errors="ignore"), True  # type: ignore[union-attr]
 
-    _scene_cache_stats["misses"] += 1
     result = _item_window(item, grid)
     if result is not None:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        result.rio.write_crs(f"EPSG:{g_epsg}").rio.to_raster(cache_path, tiled=True, compress="ZSTD", zstd_level=1)
-    return result
+        tmp = cache_path.with_suffix(".tmp.tif")
+        result.rio.write_crs(f"EPSG:{g_epsg}").rio.to_raster(tmp, tiled=True, compress="ZSTD", zstd_level=1)
+        tmp.replace(cache_path)
+    return result, False
 
 
 def _search(bbox, start, end, max_cloud, start_day, end_day):
@@ -298,9 +296,14 @@ def fetch_landsat(bbox, year, start_day, end_day, max_cloud,
     items = _search(bbox, f"{year - 2}-01-01", f"{year + 3}-01-01",
                     max_cloud, start_day, end_day)
     arrs = []
+    hits = misses = 0
     for it in items:
         if landsat_cache is not None:
-            a = load_or_download_scene(it, landsat_cache, grid, force_refresh)
+            a, hit = load_or_download_scene(it, landsat_cache, grid, force_refresh)
+            if hit:
+                hits += 1
+            else:
+                misses += 1
         else:
             a = _item_window(it, grid)
         if a is not None:
@@ -312,7 +315,7 @@ def fetch_landsat(bbox, year, start_day, end_day, max_cloud,
     cube.rio.write_crs(f"EPSG:{grid[0]}", inplace=True)
     print(f"landsat: {cube.sizes['time']} scenes, grid "
           f"{cube.sizes['y']}x{cube.sizes['x']} EPSG:{grid[0]}", flush=True)
-    return cube
+    return cube, hits, misses
 
 
 # ===================================================================== composite
@@ -429,6 +432,64 @@ def to_5070_clip(ds, geometry):
 
 
 # =========================================================================== main
+def _process_fire(i, n_total, row, args, bundle, def_path, out_base, landsat_cache):
+    fire_id = "<unknown>"
+    try:
+        fire_id = row["Event_ID"]
+        state = str(fire_id)[:2].upper()
+
+        if state not in STATE_WINDOWS:
+            print(f"Skipping {fire_id}: no image-season window for state {state}", flush=True)
+            return
+
+        sd, ed = STATE_WINDOWS[state]
+        geom = row.geometry
+        minx, miny, maxx, maxy = geom.bounds
+        b = 1000.0
+        bbox = transform_bounds(
+            "EPSG:5070", "EPSG:4326",
+            minx - b, miny - b, maxx + b, maxy + b
+        )
+
+        fire = {
+            "fire_id": fire_id,
+            "state": state,
+            "year": args.year if args.year is not None else int(row["Ig_Date"].year),  # type: ignore[union-attr]
+            "start_day": sd,
+            "end_day": ed,
+            "geometry": geom,
+            "bbox": bbox,
+        }
+
+        print(f"[{i}/{n_total}] Processing {fire_id} ...", flush=True)
+
+        cube, hits, misses = fetch_landsat(fire["bbox"], fire["year"], fire["start_day"],
+                             fire["end_day"], args.max_cloud,
+                             landsat_cache=landsat_cache,
+                             force_refresh=args.force_refresh)
+        comp = composite(cube, fire["year"])
+        stack = build_stack(comp, def_path)
+        ds = predict(stack, bundle)
+        ds = to_5070_clip(ds, fire["geometry"])
+
+        for name in ("CBI", "CBI_bc"):
+            ds[name].rio.to_raster(
+                out_base / f"{fire['fire_id']}_{name}.tif",
+                tiled=True, compress="ZSTD", zstd_level=1
+            )
+
+        cbi = ds["CBI"].values
+        print(f"  → Done: {fire_id}, {ds.sizes['y']}x{ds.sizes['x']} grid, "
+            f"valid pixels = {int(np.isfinite(cbi).sum())}, "
+            f"crs={ds.rio.crs}, CBI med={np.nanmedian(cbi):.2f} max={np.nanmax(cbi):.2f}", flush=True)
+
+        if landsat_cache is not None:
+            print(f"  → Cache: {hits} hits, {misses} misses", flush=True)
+
+    except Exception as e:
+        print(f"  → Failed on {fire_id}: {type(e).__name__}: {e}\n{traceback.format_exc()}", flush=True)
+
+
 def main() -> int:
     p = argparse.ArgumentParser(
         description="One-shot CBI for one MTBS perimeter OR all fires in a given year."
@@ -457,6 +518,8 @@ def main() -> int:
                    help="Ignore cached scenes and re-download.")
     p.add_argument("--clear-cache", action="store_true",
                    help="Delete all cached Landsat scenes before running.")
+    p.add_argument("--workers", type=int, default=1,
+                   help="Number of parallel fire workers (default: 1).")
 
     args = p.parse_args()
 
@@ -508,69 +571,23 @@ def main() -> int:
 
     print(f"Found {len(gdf)} wildfires{" in " + str(args.year) if args.year is not None else ""}.", flush=True)
 
-    for i, (_, row) in enumerate(gdf.iterrows(), start=1):  # type: ignore[union-attr]
-        fire_id = "<unknown>"
-        try:
-            fire_id = row["Event_ID"]
-            state = str(fire_id)[:2].upper()
+    if args.workers > 1:
+        bundle["model"].n_jobs = 1
 
-            if state not in STATE_WINDOWS:
-                print(f"Skipping {fire_id}: no image-season window for state {state}")
-                continue
+    rows = [(i, row) for i, (_, row) in enumerate(gdf.iterrows(), start=1)]  # type: ignore[union-attr]
+    n_total = len(rows)
 
-            sd, ed = STATE_WINDOWS[state]
-            geom = row.geometry
-            minx, miny, maxx, maxy = geom.bounds
-            b = 1000.0
-            bbox = transform_bounds(
-                "EPSG:5070", "EPSG:4326",
-                minx - b, miny - b, maxx + b, maxy + b
-            )
-
-            fire = {
-                "fire_id": fire_id,
-                "state": state,
-                "year": args.year if args.year is not None else int(row["Ig_Date"].year),  # type: ignore[union-attr]
-                "start_day": sd,
-                "end_day": ed,
-                "geometry": geom,
-                "bbox": bbox,
+    if args.workers == 1:
+        for i, row in rows:
+            _process_fire(i, n_total, row, args, bundle, def_path, out_base, landsat_cache)
+    else:
+        with ThreadPoolExecutor(max_workers=args.workers) as ex:
+            futures = {
+                ex.submit(_process_fire, i, n_total, row, args, bundle, def_path, out_base, landsat_cache): i
+                for i, row in rows
             }
-
-            print(f"[{i}/{len(gdf)}] Processing {fire_id} ...", flush=True)
-
-            cube = fetch_landsat(fire["bbox"], fire["year"], fire["start_day"],
-                                 fire["end_day"], args.max_cloud,
-                                 landsat_cache=landsat_cache,
-                                 force_refresh=args.force_refresh)
-            comp = composite(cube, fire["year"])
-            stack = build_stack(comp, def_path)
-            ds = predict(stack, bundle)
-            ds = to_5070_clip(ds, fire["geometry"])
-
-            # Write to year subfolder
-            for name in ("CBI", "CBI_bc"):
-                ds[name].rio.to_raster(
-                    out_base / f"{fire['fire_id']}_{name}.tif",
-                    tiled=True, compress="ZSTD", zstd_level=1
-                )
-
-            cbi = ds["CBI"].values
-            print(f"  → Done: {ds.sizes['y']}x{ds.sizes['x']} grid, "
-                f"valid pixels = {int(np.isfinite(cbi).sum())}, "
-                f"grid={ds.sizes['y']}x{ds.sizes['x']} crs={ds.rio.crs} "
-                f"CBI med={np.nanmedian(cbi):.2f} max={np.nanmax(cbi):.2f}", flush=True)
-
-            if landsat_cache is not None:
-                print(f"  → Cache: {_scene_cache_stats['hits']} hits, "
-                    f"{_scene_cache_stats['misses']} misses", flush=True)
-
-            _scene_cache_stats["hits"] = 0
-            _scene_cache_stats["misses"] = 0
-
-        except Exception as e:
-            print(f"  → Failed on {fire_id}: {type(e).__name__}: {e}\n{traceback.format_exc()}", flush=True)
-            continue
+            for f in as_completed(futures):
+                f.result()
 
     print(f"Processing{" for year " + str(args.year) if args.year else ""} completed.", flush=True)
 
