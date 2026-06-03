@@ -20,6 +20,7 @@ Run:
 from __future__ import annotations
 
 import argparse
+import gc
 import math
 import sys
 import traceback
@@ -596,4 +597,8 @@ def main() -> int:
 
 
 if __name__ == "__main__":
-    sys.exit(main())
+    rc = main()
+    # Force GC while module globals are still live; rasterio/xarray __del__ methods
+    # fail during interpreter teardown otherwise, producing "Error in sys.excepthook".
+    gc.collect()
+    sys.exit(rc)
