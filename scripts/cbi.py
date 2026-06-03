@@ -23,6 +23,7 @@ import argparse
 import gc
 import math
 import sys
+import threading
 import traceback
 import warnings
 import time
@@ -219,14 +220,20 @@ def load_or_download_scene(item, cache_dir: Path, grid, force_refresh: bool):
         with rasterio.open(cache_path) as ds:
             if ds.crs is not None and ds.crs.to_epsg() == g_epsg and ds.transform == g_tr:
                 da = rioxarray.open_rasterio(cache_path, masked=True)
-                return da.assign_coords(band=OPTICAL).drop_vars("spatial_ref", errors="ignore"), True  # type: ignore[union-attr]
+                loaded = da.assign_coords(band=OPTICAL).drop_vars("spatial_ref", errors="ignore").load()  # type: ignore[union-attr]
+                da.close()
+                return loaded, True
 
     result = _item_window(item, grid)
     if result is not None:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
-        tmp = cache_path.with_suffix(".tmp.tif")
-        result.rio.write_crs(f"EPSG:{g_epsg}").rio.to_raster(tmp, tiled=True, compress="ZSTD", zstd_level=1)
-        tmp.replace(cache_path)
+        tmp = cache_path.with_name(cache_path.stem + f".{threading.get_ident()}.tmp.tif")
+        try:
+            result.rio.write_crs(f"EPSG:{g_epsg}").rio.to_raster(tmp, tiled=True, compress="ZSTD", zstd_level=1)
+            tmp.replace(cache_path)
+        except Exception:
+            tmp.unlink(missing_ok=True)
+            raise
     return result, False
 
 
@@ -435,60 +442,65 @@ def to_5070_clip(ds, geometry):
 # =========================================================================== main
 def _process_fire(i, n_total, row, args, bundle, def_path, out_base, landsat_cache):
     fire_id = "<unknown>"
-    try:
-        fire_id = row["Event_ID"]
-        state = str(fire_id)[:2].upper()
+    cube = comp = stack = ds = None
+    with rasterio.Env():
+        try:
+            fire_id = row["Event_ID"]
+            state = str(fire_id)[:2].upper()
 
-        if state not in STATE_WINDOWS:
-            print(f"Skipping {fire_id}: no image-season window for state {state}", flush=True)
-            return
+            if state not in STATE_WINDOWS:
+                print(f"Skipping {fire_id}: no image-season window for state {state}", flush=True)
+                return
 
-        sd, ed = STATE_WINDOWS[state]
-        geom = row.geometry
-        minx, miny, maxx, maxy = geom.bounds
-        b = 1000.0
-        bbox = transform_bounds(
-            "EPSG:5070", "EPSG:4326",
-            minx - b, miny - b, maxx + b, maxy + b
-        )
-
-        fire = {
-            "fire_id": fire_id,
-            "state": state,
-            "year": args.year if args.year is not None else int(row["Ig_Date"].year),  # type: ignore[union-attr]
-            "start_day": sd,
-            "end_day": ed,
-            "geometry": geom,
-            "bbox": bbox,
-        }
-
-        print(f"[{i}/{n_total}] Processing {fire_id} ...", flush=True)
-
-        cube, hits, misses = fetch_landsat(fire["bbox"], fire["year"], fire["start_day"],
-                             fire["end_day"], args.max_cloud,
-                             landsat_cache=landsat_cache,
-                             force_refresh=args.force_refresh)
-        comp = composite(cube, fire["year"])
-        stack = build_stack(comp, def_path)
-        ds = predict(stack, bundle)
-        ds = to_5070_clip(ds, fire["geometry"])
-
-        for name in ("CBI", "CBI_bc"):
-            ds[name].rio.to_raster(
-                out_base / f"{fire['fire_id']}_{name}.tif",
-                tiled=True, compress="ZSTD", zstd_level=1
+            sd, ed = STATE_WINDOWS[state]
+            geom = row.geometry
+            minx, miny, maxx, maxy = geom.bounds
+            b = 1000.0
+            bbox = transform_bounds(
+                "EPSG:5070", "EPSG:4326",
+                minx - b, miny - b, maxx + b, maxy + b
             )
 
-        cbi = ds["CBI"].values
-        print(f"  → Done: {fire_id}, {ds.sizes['y']}x{ds.sizes['x']} grid, "
-            f"valid pixels = {int(np.isfinite(cbi).sum())}, "
-            f"crs={ds.rio.crs}, CBI med={np.nanmedian(cbi):.2f} max={np.nanmax(cbi):.2f}", flush=True)
+            fire = {
+                "fire_id": fire_id,
+                "state": state,
+                "year": args.year if args.year is not None else int(row["Ig_Date"].year),  # type: ignore[union-attr]
+                "start_day": sd,
+                "end_day": ed,
+                "geometry": geom,
+                "bbox": bbox,
+            }
 
-        if landsat_cache is not None:
-            print(f"  → Cache: {hits} hits, {misses} misses", flush=True)
+            print(f"[{i}/{n_total}] Processing {fire_id} ...", flush=True)
 
-    except Exception as e:
-        print(f"  → Failed on {fire_id}: {type(e).__name__}: {e}\n{traceback.format_exc()}", flush=True)
+            cube, hits, misses = fetch_landsat(fire["bbox"], fire["year"], fire["start_day"],
+                                 fire["end_day"], args.max_cloud,
+                                 landsat_cache=landsat_cache,
+                                 force_refresh=args.force_refresh)
+            comp = composite(cube, fire["year"])
+            stack = build_stack(comp, def_path)
+            ds = predict(stack, bundle)
+            ds = to_5070_clip(ds, fire["geometry"])
+
+            for name in ("CBI", "CBI_bc"):
+                ds[name].rio.to_raster(
+                    out_base / f"{fire['fire_id']}_{name}.tif",
+                    tiled=True, compress="ZSTD", zstd_level=1
+                )
+
+            cbi = ds["CBI"].values
+            print(f"  → Done: {fire_id}, {ds.sizes['y']}x{ds.sizes['x']} grid, "
+                f"valid pixels = {int(np.isfinite(cbi).sum())}, "
+                f"crs={ds.rio.crs}, CBI med={np.nanmedian(cbi):.2f} max={np.nanmax(cbi):.2f}", flush=True)
+
+            if landsat_cache is not None:
+                print(f"  → Cache: {hits} hits, {misses} misses", flush=True)
+
+        except Exception as e:
+            print(f"  → Failed on {fire_id}: {type(e).__name__}: {e}\n{traceback.format_exc()}", flush=True)
+        finally:
+            del ds, stack, comp, cube
+            gc.collect()
 
 
 def main() -> int:
