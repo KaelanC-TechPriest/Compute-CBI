@@ -76,7 +76,7 @@ Testing on all fires in data/fire_perims/test.gpkg in the year 2019.
 
 | Year | Normal | Caching (empty) | Caching (full) |
 | ---- | ----- | --------------- | --------------- |
-| 2006 | ~89.82 min | ~89.82 min |  |
+| 2006 |   | ~89.82 min | ~1.10 min |
 | 2019 | ~18.07 min | ~17.95 min | ~0.19 min |
 
 
