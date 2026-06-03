@@ -194,6 +194,7 @@ def utm_epsg(lon: float, lat: float) -> int:
 
 
 def fire_grid(bbox):
+    """Return (epsg, Affine, width, height) for a 30 m UTM grid covering bbox."""
     w, s, e, n = bbox
     epsg = utm_epsg((w + e) / 2, (s + n) / 2)
     minx, miny, maxx, maxy = transform_bounds("EPSG:4326", f"EPSG:{epsg}", w, s, e, n)
@@ -232,6 +233,7 @@ def load_or_download_scene(item, cache_dir: Path, grid, force_refresh: bool):
 
 
 def _search(bbox, start, end, max_cloud, start_day, end_day):
+    """Query Planetary Computer STAC for Landsat scenes filtered by cloud cover and DOY window."""
     cat = pystac_client.Client.open(STAC_URL, modifier=planetary_computer.sign_inplace)
     items = list(cat.search(
         collections=[COLLECTION], bbox=list(bbox), datetime=f"{start}/{end}",
@@ -294,6 +296,7 @@ def _item_window(item, grid):
 
 def fetch_landsat(bbox, year, start_day, end_day, max_cloud,
                   landsat_cache: Path | None = None, force_refresh: bool = False):
+    """Fetch Landsat C2 L2 scenes for a fire bbox and return a (time, band, y, x) cube."""
     grid = fire_grid(bbox)
     items = _search(bbox, f"{year - 2}-01-01", f"{year + 3}-01-01",
                     max_cloud, start_day, end_day)
@@ -329,6 +332,7 @@ def _scene_indices(cube):
 
 
 def composite(cube, year):
+    """Average spectral indices into pre- and post-fire composites relative to fire year."""
     idx = _scene_indices(cube)
     years = pd.to_datetime(cube.time.values).year.to_numpy()
     nan_slice = xr.full_like(idx.isel(time=0, drop=True), np.nan)
@@ -355,6 +359,7 @@ def _trunc(da):
 
 
 def build_stack(comp, def_path):
+    """Build the 6-band predictor stack (RBR, dNDVI, dMIRBI, post-MIRBI, DEF, lat)."""
     pre, post = comp["pre"], comp["post"]
     pre_nbr = pre.sel(index="nbr")
     dnbr = _trunc((pre_nbr - post.sel(index="nbr")) * 1000.0)
@@ -390,6 +395,7 @@ def _floor2(a):
 
 
 def predict(stack, bundle):
+    """Run the RF model on the predictor stack and return CBI and bias-corrected CBI."""
     X = stack.sel(band=bundle["predictors"])
     arr = X.values
     nb, ny, nx = arr.shape
@@ -415,6 +421,7 @@ def predict(stack, bundle):
 
 # ========================================================================== 5070
 def to_5070_clip(ds, geometry):
+    """Reproject to EPSG:5070 snapped to the NLCD grid, then clip to the fire perimeter."""
     ox, oy = NLCD_ORIGIN
     minx, miny, maxx, maxy = geometry.bounds
     left = ox + math.floor((minx - ox) / RES) * RES
