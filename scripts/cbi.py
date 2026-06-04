@@ -213,11 +213,11 @@ def get_scene_cache_path(cache_dir: Path, item) -> Path:
     return cache_dir / "scenes" / f"{scene_id}.tif"
 
 
-def load_or_download_scene(item, cache_dir: Path, grid, force_refresh: bool):
+def load_or_download_scene(item, cache_dir: Path, grid):
     """Return processed scene for the fire grid, loading from cache when possible."""
     g_epsg, g_tr, g_w, g_h = grid
     cache_path = get_scene_cache_path(cache_dir, item)
-    if not force_refresh and cache_path.is_file():
+    if cache_path.is_file():
         with rasterio.open(cache_path) as ds:
             if ds.crs is not None and ds.crs.to_epsg() == g_epsg and ds.transform == g_tr:
                 _scene_cache_stats["hits"] += 1
@@ -295,7 +295,7 @@ def _item_window(item, grid):
 
 
 def fetch_landsat(bbox, year, start_day, end_day, max_cloud,
-                  landsat_cache: Path | None = None, force_refresh: bool = False):
+                  landsat_cache: Path | None = None):
     """Fetch Landsat C2 L2 scenes for a fire bbox and return a (time, band, y, x) cube."""
     grid = fire_grid(bbox)
     items = _search(bbox, f"{year - 2}-01-01", f"{year + 3}-01-01",
@@ -303,7 +303,7 @@ def fetch_landsat(bbox, year, start_day, end_day, max_cloud,
     arrs = []
     for it in items:
         if landsat_cache is not None:
-            a = load_or_download_scene(it, landsat_cache, grid, force_refresh)
+            a = load_or_download_scene(it, landsat_cache, grid)
         else:
             a = _item_window(it, grid)
         if a is not None:
@@ -438,7 +438,7 @@ def to_5070_clip(ds, geometry):
 # =========================================================================== main
 def main() -> int:
     p = argparse.ArgumentParser(
-        description="One-shot CBI for one MTBS perimeter OR all fires in a given year."
+        description="One-shot CBI for one MTBS perimeter OR all fires in a given state."
     )
     p.add_argument("--gpkg", required=True)
     sel = p.add_mutually_exclusive_group()
@@ -453,15 +453,10 @@ def main() -> int:
     p.add_argument("--model", default=str(MODEL_PATH))
     p.add_argument("--def", dest="def_tif", default=str(DEF_TIF))
     p.add_argument("--csv", default=str(TRAIN_CSV))
-    
-    p.add_argument("--year", type=int, default=None,
-                   help="Process ALL wildfires from this year (batch mode).")
     p.add_argument("--state", default=None,
                    help="2-letter state abbreviation (e.g. MT, AK) to filter fires by state.")
     p.add_argument("--landsat-cache", default=None,
                    help="Directory for cached Landsat scenes (default: data/landsat_cache).")
-    p.add_argument("--force-refresh", action="store_true",
-                   help="Ignore cached scenes and re-download.")
     p.add_argument("--clear-cache", action="store_true",
                    help="Delete all cached Landsat scenes before running.")
 
@@ -492,22 +487,14 @@ def main() -> int:
     # Load the layer once
     gdf = gpd.read_file(args.gpkg, layer=args.layer).to_crs(5070)
 
-    in_batch = args.year is not None or (
-        args.state is not None and args.event_id is None and args.index is None
-    )
-    if in_batch:
-        label_parts = [s for s in [args.state, str(args.year) if args.year else None] if s]
-        print(f"Batch mode: Processing all wildfires {' '.join(label_parts)}", flush=True)
+    sub_parts = [args.state] if args.state else []
+    out_base = out_base.joinpath(*sub_parts)
+    out_base.mkdir(parents=True, exist_ok=True)
 
-        gdf = gdf[gdf["Incid_Type"] == WILDFIRE_CODE]
-        if args.year is not None:
-            gdf = gdf[gdf["Ig_Date"].dt.year == args.year]  # type: ignore[union-attr]
-        if args.state is not None:
-            gdf = gdf[gdf["Event_ID"].str[:2].str.upper() == args.state]
+    gdf = gdf[gdf["Incid_Type"] == WILDFIRE_CODE]
 
-        sub_parts = [s for s in [args.state, str(args.year) if args.year else None] if s]
-        out_base = out_base.joinpath(*sub_parts)
-        out_base.mkdir(parents=True, exist_ok=True)
+    if args.state is not None:
+        gdf = gdf[gdf["Event_ID"].str[:2].str.upper() == args.state]
 
     if args.event_id is not None:
         gdf = gdf[gdf["Event_ID"] == args.event_id]
@@ -520,12 +507,11 @@ def main() -> int:
         gdf = gdf.iloc[args.index]  # type: ignore[union-attr]
 
     if gdf.empty:  # type: ignore[union-attr]
-        print(f"No wildfires found for state {args.state}, year {args.year}, id {args.event_id}, index {args.index}", flush=True)
+        print(f"No wildfires found for state {args.state}, id {args.event_id}, index {args.index}", flush=True)
         return 0
 
     state_str = f" in {args.state}" if args.state else ""
-    year_str = f" in {args.year}" if args.year else ""
-    print(f"Found {len(gdf)} wildfires{state_str}{year_str}.", flush=True)
+    print(f"Found {len(gdf)} wildfires{state_str}.", flush=True)
 
     for i, (_, row) in enumerate(gdf.iterrows(), start=1):  # type: ignore[union-attr]
         fire_id = "<unknown>"
@@ -549,7 +535,7 @@ def main() -> int:
             fire = {
                 "fire_id": fire_id,
                 "state": state,
-                "year": args.year if args.year is not None else int(row["Ig_Date"].year),  # type: ignore[union-attr]
+                "year": int(row["Ig_Date"].year),
                 "start_day": sd,
                 "end_day": ed,
                 "geometry": geom,
@@ -560,8 +546,7 @@ def main() -> int:
 
             cube = fetch_landsat(fire["bbox"], fire["year"], fire["start_day"],
                                  fire["end_day"], args.max_cloud,
-                                 landsat_cache=landsat_cache,
-                                 force_refresh=args.force_refresh)
+                                 landsat_cache=landsat_cache)
             comp = composite(cube, fire["year"])
             stack = build_stack(comp, def_path)
             ds = predict(stack, bundle)
@@ -591,7 +576,7 @@ def main() -> int:
             print(f"  → Failed on {fire_id}: {type(e).__name__}: {e}\n{traceback.format_exc()}", flush=True)
             continue
 
-    suffix_parts = [s for s in [args.state, str(args.year) if args.year else None] if s]
+    suffix_parts = [args.state] if args.state else []
     print(f"Processing{' for ' + ' '.join(suffix_parts) if suffix_parts else ''} completed.", flush=True)
 
     print(f"Finished in {(time.perf_counter() - start_time) / 60:.2f} minutes.")
