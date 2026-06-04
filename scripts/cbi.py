@@ -517,10 +517,16 @@ def main() -> int:
         fire_id = "<unknown>"
         try:
             fire_id = row["Event_ID"]
+            
+            year = int(row["Ig_Date"].year)
+            if year < 1986 or year > 2020:
+                print(f"[{i}/{len(gdf)}] Skipping {fire_id}: can't get data for year {year}")
+                continue
+
             state = str(fire_id)[:2].upper()
 
             if state not in STATE_WINDOWS:
-                print(f"Skipping {fire_id}: no image-season window for state {state}")
+                print(f"[{i}/{len(gdf)}] Skipping {fire_id}: no image-season window for state {state}")
                 continue
 
             sd, ed = STATE_WINDOWS[state]
@@ -535,7 +541,7 @@ def main() -> int:
             fire = {
                 "fire_id": fire_id,
                 "state": state,
-                "year": int(row["Ig_Date"].year),
+                "year": year,
                 "start_day": sd,
                 "end_day": ed,
                 "geometry": geom,
