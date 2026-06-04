@@ -222,7 +222,7 @@ def load_or_download_scene(item, cache_dir: Path, grid, force_refresh: bool):
             if ds.crs is not None and ds.crs.to_epsg() == g_epsg and ds.transform == g_tr:
                 _scene_cache_stats["hits"] += 1
                 da = rioxarray.open_rasterio(cache_path, masked=True)
-                return da.assign_coords(band=OPTICAL).drop_vars("spatial_ref", errors="ignore") # type: ignore[union-attr]
+                return da.assign_coords(band=OPTICAL).drop_vars("spatial_ref", errors="ignore")
 
     _scene_cache_stats["misses"] += 1
     result = _item_window(item, grid)
@@ -454,10 +454,10 @@ def main() -> int:
     p.add_argument("--def", dest="def_tif", default=str(DEF_TIF))
     p.add_argument("--csv", default=str(TRAIN_CSV))
     
-    # NEW: Optional year for batch processing
     p.add_argument("--year", type=int, default=None,
-                   help="If provided, process ALL wildfires from this year "
-                        "(overrides --event-id and --index).")
+                   help="Process ALL wildfires from this year (batch mode).")
+    p.add_argument("--state", default=None,
+                   help="2-letter state abbreviation (e.g. MT, AK) to filter fires by state.")
     p.add_argument("--landsat-cache", default=None,
                    help="Directory for cached Landsat scenes (default: data/landsat_cache).")
     p.add_argument("--force-refresh", action="store_true",
@@ -466,6 +466,11 @@ def main() -> int:
                    help="Delete all cached Landsat scenes before running.")
 
     args = p.parse_args()
+
+    if args.state is not None:
+        args.state = args.state.upper()
+        if args.state not in STATE_WINDOWS:
+            p.error(f"Unknown state '{args.state}'. Known states: {', '.join(sorted(STATE_WINDOWS))}")
 
     start_time = time.perf_counter()
 
@@ -487,16 +492,21 @@ def main() -> int:
     # Load the layer once
     gdf = gpd.read_file(args.gpkg, layer=args.layer).to_crs(5070)
 
-    if args.year is not None:
-        # ====================== BATCH MODE: All fires in one year ======================
-        print(f"Batch mode: Processing all wildfires in year {args.year}", flush=True)
+    in_batch = args.year is not None or (
+        args.state is not None and args.event_id is None and args.index is None
+    )
+    if in_batch:
+        label_parts = [s for s in [args.state, str(args.year) if args.year else None] if s]
+        print(f"Batch mode: Processing all wildfires {' '.join(label_parts)}", flush=True)
 
-        # Filter to wildfires in the requested year
         gdf = gdf[gdf["Incid_Type"] == WILDFIRE_CODE]
-        gdf = gdf[gdf["Ig_Date"].dt.year == args.year]  # type: ignore[union-attr]
+        if args.year is not None:
+            gdf = gdf[gdf["Ig_Date"].dt.year == args.year]  # type: ignore[union-attr]
+        if args.state is not None:
+            gdf = gdf[gdf["Event_ID"].str[:2].str.upper() == args.state]
 
-        # Create year-specific output folder
-        out_base = out_base / str(args.year)
+        sub_parts = [s for s in [args.state, str(args.year) if args.year else None] if s]
+        out_base = out_base.joinpath(*sub_parts)
         out_base.mkdir(parents=True, exist_ok=True)
 
     if args.event_id is not None:
@@ -510,10 +520,12 @@ def main() -> int:
         gdf = gdf.iloc[args.index]  # type: ignore[union-attr]
 
     if gdf.empty:  # type: ignore[union-attr]
-        print(f"No wildfires found for year {args.year}, id {args.event_id}, index {args.index}", flush=True)
+        print(f"No wildfires found for state {args.state}, year {args.year}, id {args.event_id}, index {args.index}", flush=True)
         return 0
 
-    print(f"Found {len(gdf)} wildfires{" in " + str(args.year) if args.year is not None else ""}.", flush=True)
+    state_str = f" in {args.state}" if args.state else ""
+    year_str = f" in {args.year}" if args.year else ""
+    print(f"Found {len(gdf)} wildfires{state_str}{year_str}.", flush=True)
 
     for i, (_, row) in enumerate(gdf.iterrows(), start=1):  # type: ignore[union-attr]
         fire_id = "<unknown>"
@@ -579,7 +591,8 @@ def main() -> int:
             print(f"  → Failed on {fire_id}: {type(e).__name__}: {e}\n{traceback.format_exc()}", flush=True)
             continue
 
-    print(f"Processing{" for year " + str(args.year) if args.year else ""} completed.", flush=True)
+    suffix_parts = [s for s in [args.state, str(args.year) if args.year else None] if s]
+    print(f"Processing{' for ' + ' '.join(suffix_parts) if suffix_parts else ''} completed.", flush=True)
 
     print(f"Finished in {(time.perf_counter() - start_time) / 60:.2f} minutes.")
     return 0
