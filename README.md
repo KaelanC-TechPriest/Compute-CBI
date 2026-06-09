@@ -101,5 +101,22 @@ Testing on all fires in data/fire_perims/test.gpkg in the year 2019.
 ## 06/09/2026
 
 - A run covering NJ for the entire timespan had 0 cache hits. This suggests
-that caching is most likely useless if the scenes are only as large as the fire
-perimeters.
+    that caching is most likely useless if the scenes are only as large as the fire
+    perimeters.
+
+I intend to transition to having multiple different scripts to test the
+different methods we've discussed. These will be the scripts in use:
+
+```
+scripts/
+├── cbi_oneshot.py - The original oneshot file provided by Fred.
+├── cbi_yearly.py - Uses the perimeter method for each state in a given year.
+├── cbi_statewide.py - Preemptively caches the entire state.
+├── cbi_statewide_threaded.py - Same functionality with multithreading.
+├── cbi_perimeter.py - Caches each fire as it appears in the list.
+├── cbi_perimeter_threaded.py - Same functionality with multithreading.
+└── utils.py - A collection of commonly used functions.
+```
+
+- Doing perimeter-wide caching results in almost 0 cache hits, so it may be
+    worth creating separate, non-caching scripts as well
