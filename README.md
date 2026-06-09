@@ -76,11 +76,7 @@ Testing on all fires in data/fire_perims/test.gpkg in the year 2019.
 
 | Year | Normal | Caching (empty) | Caching (full) |
 | ---- | ----- | --------------- | --------------- |
-<<<<<<< HEAD
-| 2006 |   | ~89.82 min | ~1.10 min |
-=======
 | 2006 | ~89.82 min | ~89.82 min |  |
->>>>>>> state-cache
 | 2019 | ~18.07 min | ~17.95 min | ~0.19 min |
 
 
@@ -94,14 +90,16 @@ Testing on all fires in data/fire_perims/test.gpkg in the year 2019.
 | 2006 | ~45.07 min |
 | 2019 | ~11.04 min |
 
-<<<<<<< HEAD
-=======
 
 ## 06/04/2026
 
 | METHOD | RUNTIME NJ |
 | ----- | -- |
-| Sequential, fire-bounds | |
+| Sequential, fire-bounds | 224.43 min |
 | Sequential, state-bounds | |
 
->>>>>>> state-cache
+## 06/09/2026
+
+- A run covering NJ for the entire timespan had 0 cache hits. This suggests
+that caching is most likely useless if the scenes are only as large as the fire
+perimeters.
