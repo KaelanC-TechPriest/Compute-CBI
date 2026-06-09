@@ -22,3 +22,7 @@ dependencies = [
     "h5netcdf",
     "h5py",
 ]
+
+[tool.pycodestyle]
+ignore = ["E501"]
+max-line-length = 88

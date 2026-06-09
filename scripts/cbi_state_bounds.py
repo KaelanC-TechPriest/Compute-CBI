@@ -204,6 +204,16 @@ def fire_grid(bbox):
     return epsg, Affine(RES, 0, minx, 0, -RES, maxy), width, height
 
 
+def compute_state_bbox(gdf_state: gpd.GeoDataFrame, buffer_m: float = 50_000.0):
+    """Return (w, s, e, n) in WGS84 for the union of state fire perimeters plus buffer.
+
+    gdf_state must be in EPSG:5070 so the buffer is in metres.
+    """
+    buffered = gdf_state.union_all().buffer(buffer_m)
+    minx, miny, maxx, maxy = buffered.bounds
+    return transform_bounds("EPSG:5070", "EPSG:4326", minx, miny, maxx, maxy)
+
+
 # ====================================================================== landsat
 _scene_cache_stats = {"hits": 0, "misses": 0}
 
@@ -213,7 +223,12 @@ def get_scene_cache_path(cache_dir: Path, item) -> Path:
     return cache_dir / "scenes" / f"{scene_id}.tif"
 
 
-def load_or_download_scene(item, cache_dir: Path, grid):
+def raw_scene_path(cache_dir: Path, item, state: str) -> Path:
+    scene_id = item.properties.get("landsat:scene_id") or item.id
+    return cache_dir / "raw" / state / f"{scene_id}.tif"
+
+
+def load_or_download_scene(item, cache_dir: Path, grid, raw_path: Path | None = None):
     """Return processed scene for the fire grid, loading from cache when possible."""
     g_epsg, g_tr, g_w, g_h = grid
     cache_path = get_scene_cache_path(cache_dir, item)
@@ -225,7 +240,7 @@ def load_or_download_scene(item, cache_dir: Path, grid):
                 return da.assign_coords(band=OPTICAL).drop_vars("spatial_ref", errors="ignore")
 
     _scene_cache_stats["misses"] += 1
-    result = _item_window(item, grid)
+    result = _item_window(item, grid, raw_path=raw_path)
     if result is not None:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         result.rio.write_crs(f"EPSG:{g_epsg}").rio.to_raster(cache_path, tiled=True, compress="ZSTD", zstd_level=1)
@@ -246,14 +261,26 @@ def _search(bbox, start, end, max_cloud, start_day, end_day):
     return items
 
 
-def _item_window(item, grid):
-    """Read the fire-bbox window of an item, scale + QA-mask, reproject to grid."""
+def _item_window(item, grid, raw_path: Path | None = None):
+    """Read the fire-bbox window of an item, scale + QA-mask, reproject to grid.
+
+    If raw_path points to an existing state-level raw cache file, reads from it
+    (native projection, multi-band) instead of fetching from remote STAC assets.
+    """
     g_epsg, g_tr, g_w, g_h = grid
-    epsg = int(item.properties["proj:code"].split(":")[1])
-    tr = item.properties["proj:transform"]
-    sh = item.properties["proj:shape"]
-    H, W = int(sh[0]), int(sh[1])
-    A = Affine(*tr[:6])
+
+    use_raw = raw_path is not None and raw_path.is_file()
+    if use_raw:
+        with rasterio.open(raw_path) as meta_ds:  # type: ignore[arg-type]
+            epsg = meta_ds.crs.to_epsg()
+            A: Affine = meta_ds.transform
+            H, W = meta_ds.height, meta_ds.width
+    else:
+        epsg = int(item.properties["proj:code"].split(":")[1])
+        tr = item.properties["proj:transform"]
+        sh = item.properties["proj:shape"]
+        H, W = int(sh[0]), int(sh[1])
+        A = Affine(*tr[:6])
 
     left = g_tr.c
     top = g_tr.f
@@ -271,10 +298,15 @@ def _item_window(item, grid):
     wtr: Affine = A * Affine.translation(c0, r0)  # type: ignore[assignment]
 
     arr = {}
-    with rasterio.Env(**_GDAL_ENV):  # type: ignore[arg-type]
-        for band in BANDS:
-            with rasterio.open(item.assets[band].href) as ds:
-                arr[band] = ds.read(1, window=win)
+    if use_raw:
+        with rasterio.open(raw_path) as ds:  # type: ignore[arg-type]
+            for bi, band in enumerate(BANDS, start=1):
+                arr[band] = ds.read(bi, window=win)
+    else:
+        with rasterio.Env(**_GDAL_ENV):  # type: ignore[arg-type]
+            for band in BANDS:
+                with rasterio.open(item.assets[band].href) as ds:
+                    arr[band] = ds.read(1, window=win)
 
     h, w = arr[QA].shape
     xs = wtr.c + (np.arange(w) + 0.5) * wtr.a
@@ -294,16 +326,85 @@ def _item_window(item, grid):
     return out.drop_vars("spatial_ref", errors="ignore")
 
 
+def _download_raw_scene(item, bbox_4326, out_path: Path) -> bool:
+    """Download the bbox window of a scene in its native projection as a multi-band GeoTIFF.
+
+    Returns True if the file was written, False if the scene doesn't overlap bbox.
+    """
+    epsg = int(item.properties["proj:code"].split(":")[1])
+    tr = item.properties["proj:transform"]
+    sh = item.properties["proj:shape"]
+    H, W = int(sh[0]), int(sh[1])
+    A = Affine(*tr[:6])
+
+    w, s, e, n = bbox_4326
+    minx, miny, maxx, maxy = transform_bounds("EPSG:4326", f"EPSG:{epsg}", w, s, e, n)
+    c0 = max(0, math.floor((minx - A.c) / A.a))
+    c1 = min(W, math.ceil((maxx - A.c) / A.a))
+    r0 = max(0, math.floor((maxy - A.f) / A.e))
+    r1 = min(H, math.ceil((miny - A.f) / A.e))
+    if c1 <= c0 or r1 <= r0:
+        return False
+
+    win = Window(c0, r0, c1 - c0, r1 - r0)  # type: ignore[call-arg]
+    wtr: Affine = A * Affine.translation(c0, r0)  # type: ignore[assignment]
+
+    arrays = []
+    with rasterio.Env(**_GDAL_ENV):  # type: ignore[arg-type]
+        for band in BANDS:
+            with rasterio.open(item.assets[band].href) as ds:
+                arrays.append(ds.read(1, window=win))
+
+    h, w_px = arrays[0].shape
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out_path.with_suffix(".tmp.tif")
+    with rasterio.open(
+        tmp, "w", driver="GTiff",
+        count=len(BANDS), dtype=arrays[0].dtype,
+        crs=f"EPSG:{epsg}", transform=wtr,
+        width=w_px, height=h,
+        tiled=True, compress="ZSTD", zstd_level=1,
+    ) as ds:
+        for i, arr in enumerate(arrays, start=1):
+            ds.write(arr, i)
+    tmp.replace(out_path)
+    return True
+
+
+def prefetch_state(state: str, state_bbox, years, cache_dir: Path,
+                   max_cloud: float, start_day: int, end_day: int) -> None:
+    """Cache raw Landsat scene windows covering the full state bbox for all requested years."""
+    total_cached = total_downloaded = 0
+    for year in years:
+        items = _search(state_bbox, f"{year}-01-01", f"{year + 1}-01-01",
+                        max_cloud, start_day, end_day)
+        cached = downloaded = 0
+        for item in items:
+            path = raw_scene_path(cache_dir, item, state)
+            if path.is_file():
+                cached += 1
+                continue
+            if _download_raw_scene(item, state_bbox, path):
+                downloaded += 1
+        total_cached += cached
+        total_downloaded += downloaded
+        print(f"  prefetch {year}: {len(items)} scenes, "
+              f"{cached} already cached, {downloaded} downloaded", flush=True)
+    print(f"prefetch done: {total_cached} cached hits, {total_downloaded} downloaded", flush=True)
+
+
 def fetch_landsat(bbox, year, start_day, end_day, max_cloud,
-                  landsat_cache: Path | None = None):
+                  landsat_cache: Path | None = None, state: str | None = None):
     """Fetch Landsat C2 L2 scenes for a fire bbox and return a (time, band, y, x) cube."""
     grid = fire_grid(bbox)
     items = _search(bbox, f"{year - 2}-01-01", f"{year + 3}-01-01",
                     max_cloud, start_day, end_day)
     arrs = []
     for it in items:
+        rp = (raw_scene_path(landsat_cache, it, state)
+              if landsat_cache is not None and state is not None else None)
         if landsat_cache is not None:
-            a = load_or_download_scene(it, landsat_cache, grid)
+            a = load_or_download_scene(it, landsat_cache, grid, raw_path=rp)
         else:
             a = _item_window(it, grid)
         if a is not None:
@@ -513,6 +614,14 @@ def main() -> int:
     state_str = f" in {args.state}" if args.state else ""
     print(f"Found {len(gdf)} wildfires{state_str}.", flush=True)
 
+    if args.state is not None and landsat_cache is not None:
+        sd_pre, ed_pre = STATE_WINDOWS[args.state]
+        state_bbox = compute_state_bbox(gdf)
+        print(f"prefetch: {args.state} bbox={tuple(round(x, 4) for x in state_bbox)}, "
+              f"years 1984-2022", flush=True)
+        prefetch_state(args.state, state_bbox, range(1984, 2023),
+                       landsat_cache, args.max_cloud, sd_pre, ed_pre)
+
     for i, (_, row) in enumerate(gdf.iterrows(), start=1):  # type: ignore[union-attr]
         fire_id = "<unknown>"
         try:
@@ -552,7 +661,7 @@ def main() -> int:
 
             cube = fetch_landsat(fire["bbox"], fire["year"], fire["start_day"],
                                  fire["end_day"], args.max_cloud,
-                                 landsat_cache=landsat_cache)
+                                 landsat_cache=landsat_cache, state=state)
             comp = composite(cube, fire["year"])
             stack = build_stack(comp, def_path)
             ds = predict(stack, bundle)
