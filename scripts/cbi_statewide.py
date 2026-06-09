@@ -137,9 +137,9 @@ def main() -> int:
     p.add_argument("--model", default=str(MODEL_PATH))
     p.add_argument("--def", dest="def_tif", default=str(DEF_TIF))
     p.add_argument("--csv", default=str(TRAIN_CSV))
-    p.add_argument("--state", default=None,
+    p.add_argument("--state", default=None, required=True,
                    help="2-letter state abbreviation (e.g. MT, AK) to filter fires by state.")
-    p.add_argument("--landsat-cache", default=None,
+    p.add_argument("--landsat-cache", default=None, required=True,
                    help="Directory for cached Landsat scenes (default: data/landsat_cache).")
     p.add_argument("--clear-cache", action="store_true",
                    help="Delete all cached Landsat scenes before running.")
