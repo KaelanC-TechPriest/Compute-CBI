@@ -123,3 +123,14 @@ scripts/
 
 - Doing perimeter-wide caching results in almost 0 cache hits, so it may be
     worth creating separate, non-caching scripts as well
+
+# Issues
+
+## Bad URL passing to rasterio
+
+Sometimes, this url is getting passed to rasterio which throws the error below.
+This is (probably) because of the little `/vsicurl/` at the beginning.
+
+```
+rasterio._err.CPLE_OpenFailedError: '/vsicurl/https://landsateuwest.blob.core.windows.net/landsat-c2/level-2/standard/oli-tirs/2022/014/033/LC09_L2SP_014033_20220704_20220802_02_T1/LC09_L2SP_014033_20220704_20220802_02_T1_QA_PIXEL.TIF?st=2026-06-10T21%3A59%3A31Z&se=2026-06-11T22%3A44%3A31Z&sp=rl&sv=2025-07-05&sr=c&skoid=9c8ff44a-6a2c-4dfb-b298-1c9212f64d9a&sktid=72f988bf-86f1-41af-91ab-2d7cd011db47&skt=2026-06-11T21%3A13%3A23Z&ske=2026-06-18T21%3A13%3A23Z&sks=b&skv=2025-07-05&sig=8OndyN56m6dr5/bwGyXbXxyPikdTAxWbkOmSUoZqri8%3D' not recognized as being in a supported file format.
+```
