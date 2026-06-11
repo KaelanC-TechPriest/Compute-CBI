@@ -111,8 +111,11 @@ def prefetch_state(state: str, state_bbox, years, cache_dir: Path,
             if path.is_file():
                 cached += 1
                 continue
-            if _download_raw_scene(item, state_bbox, path):
-                downloaded += 1
+            try:
+                if _download_raw_scene(item, state_bbox, path):
+                    downloaded += 1
+            except Exception as e:
+                print(f"prefetch: skipping {item.id} because of error: {e}")
         total_cached += cached
         total_downloaded += downloaded
         print(f"  prefetch {year}: {len(items)} scenes, "
