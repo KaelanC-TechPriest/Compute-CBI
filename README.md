@@ -96,7 +96,10 @@ Testing on all fires in data/fire_perims/test.gpkg in the year 2019.
 | METHOD | RUNTIME NJ |
 | ----- | -- |
 | Sequential, fire-bounds | 224.43 min |
-| Sequential, state-bounds | |
+| Sequential, state-bounds | 1387.40 min |
+
+- Both runs were incomplete due to issues with landsat data.
+- The state-bounds run started with the first few years cached.
 
 ## 06/09/2026
 
