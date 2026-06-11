@@ -12,6 +12,7 @@ import numpy as np
 import pandas as pd
 import planetary_computer
 import pystac_client
+from pystac_client.stac_api_io import StacApiIO
 import rasterio
 import rioxarray  # noqa: F401  -- registers the `.rio` accessor
 import sklearn
@@ -60,6 +61,7 @@ _GDAL_ENV = {
     "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif",
     "GDAL_HTTP_MULTIRANGE": "YES",
     "GDAL_HTTP_MERGE_CONSECUTIVE_RANGES": "YES",
+    "GDAL_HTTP_TIMEOUT": "360",
 }
 
 # ----------------------------------------------------------------------------- mtbs
@@ -218,7 +220,8 @@ def load_or_download_scene(item, cache_dir: Path, grid, raw_path: Path | None = 
 
 def _search(bbox, start, end, max_cloud, start_day, end_day):
     """Query Planetary Computer STAC for Landsat scenes filtered by cloud cover and DOY window."""
-    cat = pystac_client.Client.open(STAC_URL, modifier=planetary_computer.sign_inplace)
+    cat = pystac_client.Client.open(STAC_URL, modifier=planetary_computer.sign_inplace,
+                                    stac_io=StacApiIO(timeout=360, max_retries=15))
     items = list(cat.search(
         collections=[COLLECTION], bbox=list(bbox), datetime=f"{start}/{end}",
         query={"eo:cloud_cover": {"lt": max_cloud}},
@@ -274,7 +277,8 @@ def _item_window(item, grid, raw_path: Path | None = None):
     else:
         with rasterio.Env(**_GDAL_ENV):  # type: ignore[arg-type]
             for band in BANDS:
-                with rasterio.open(item.assets[band].href) as ds:
+                url = item.assets[band].href
+                with rasterio.open(url) as ds:
                     arr[band] = ds.read(1, window=win)
 
     h, w = arr[QA].shape
@@ -296,7 +300,8 @@ def _item_window(item, grid, raw_path: Path | None = None):
 
 
 def fetch_landsat(bbox, year, start_day, end_day, max_cloud,
-                  landsat_cache: Path | None = None, state: str | None = None):
+                  landsat_cache: Path | None = None, state: str | None = None,
+                  cache_processed: bool = True):
     """Fetch Landsat C2 L2 scenes for a fire bbox and return a (time, band, y, x) cube."""
     grid = fire_grid(bbox)
     items = _search(bbox, f"{year - 2}-01-01", f"{year + 3}-01-01",
@@ -306,7 +311,10 @@ def fetch_landsat(bbox, year, start_day, end_day, max_cloud,
         rp = (raw_scene_path(landsat_cache, it, state)
               if landsat_cache is not None and state is not None else None)
         if landsat_cache is not None:
-            a = load_or_download_scene(it, landsat_cache, grid, raw_path=rp)
+            if cache_processed:
+                a = load_or_download_scene(it, landsat_cache, grid, raw_path=rp)
+            else:
+                a = _item_window(it, grid, raw_path=rp)
         else:
             a = _item_window(it, grid)
         if a is not None:
