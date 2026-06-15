@@ -97,6 +97,10 @@ def main() -> int:
                    help="Directory for cached Landsat scenes (default: data/landsat_cache).")
     p.add_argument("--clear-cache", action="store_true",
                    help="Delete all cached Landsat scenes before running.")
+    p.add_argument("--start-year", type=int, default=1984,
+                   help="First fire ignition year to process (default: 1984).")
+    p.add_argument("--end-year", type=int, default=2022,
+                   help="Last fire ignition year to process (default: 2022).")
 
     args = p.parse_args()
 
@@ -156,7 +160,7 @@ def main() -> int:
         state_bbox = compute_state_bbox(gdf)
         print(f"prefetch: {args.state} bbox={tuple(round(x, 4) for x in state_bbox)}, "
               f"years 1984-2022", flush=True)
-        prefetch_state(args.state, state_bbox, range(1984, 2023),
+        prefetch_state(args.state, state_bbox, range(args.start_year, args.end_year + 1),
                        landsat_cache, args.max_cloud, sd_pre, ed_pre)
 
     for i, (_, row) in enumerate(gdf.iterrows(), start=1):  # type: ignore[union-attr]
@@ -167,6 +171,10 @@ def main() -> int:
             year = int(row["Ig_Date"].year)
             if year < 1986 or year > 2020:
                 print(f"[{i}/{len(gdf)}] Skipping {fire_id}: can't get data for year {year}")
+                continue
+            if year < args.start_year or year > args.end_year:
+                print(f"[{i}/{len(gdf)}] Skipping {fire_id}: year {year} outside requested range "
+                      f"{args.start_year}–{args.end_year}")
                 continue
 
             state = str(fire_id)[:2].upper()
