@@ -80,7 +80,7 @@ def _download_raw_scene(item, bbox_4326, out_path: Path) -> bool:
     arrays = []
     with rasterio.Env(**_GDAL_ENV):  # type: ignore[arg-type]
         for band in BANDS:
-            with rasterio.open(item.assets[band].href) as ds:
+            with rasterio.open(item.assets[band].href.removeprefix("/vsicurl/")) as ds:
                 arrays.append(ds.read(1, window=win))
 
     h, w_px = arrays[0].shape
@@ -287,6 +287,7 @@ def main() -> int:
                     if _download_raw_scene(it, union_bbox, rp):
                         with dl_lock:
                             dl_ok += 1
+                            print(f"  prefetch {dl_ok}/{to_download} downloaded", flush=True)
                 except Exception as e:
                     scene_id = it.properties.get("landsat:scene_id") or it.id
                     print(f"  prefetch: skipping {scene_id}: {e}", flush=True)
