@@ -277,7 +277,7 @@ def _item_window(item, grid, raw_path: Path | None = None):
     else:
         with rasterio.Env(**_GDAL_ENV):  # type: ignore[arg-type]
             for band in BANDS:
-                url = item.assets[band].href
+                url = item.assets[band].href.removeprefix("/vsicurl/")
                 with rasterio.open(url) as ds:
                     arr[band] = ds.read(1, window=win)
 
