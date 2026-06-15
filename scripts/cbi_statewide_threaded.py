@@ -119,8 +119,11 @@ def prefetch_state(state: str, state_bbox, years, cache_dir: Path,
             else:
                 to_download.append((item, path))
 
-    print(f"prefetch: {already_cached} already cached, "
-          f"{len(to_download)} queued for download ({n_workers} workers)", flush=True)
+        print(f"  prefetch year={year}: queued")
+
+    num_to_download = len(to_download)
+    print(f"  prefetch: {already_cached} already cached, "
+          f"{num_to_download} queued for download ({n_workers} workers)", flush=True)
 
     dl_q: queue.Queue = queue.Queue()
     for entry in to_download:
@@ -140,6 +143,7 @@ def prefetch_state(state: str, state_bbox, years, cache_dir: Path,
                 if _download_raw_scene(item, state_bbox, path):
                     with lock:
                         downloaded += 1
+                        print(f"  prefetch {downloaded}/{num_to_download} downloaded", flush=True)
             except Exception as e:
                 print(f"  prefetch: skipping {item.id}: {e}", flush=True)
                 with lock:
