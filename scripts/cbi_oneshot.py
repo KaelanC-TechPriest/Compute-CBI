@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -47,19 +48,28 @@ def main() -> int:
     p.add_argument("--def", dest="def_tif", default=str(DEF_TIF))
     p.add_argument("--csv", default=str(TRAIN_CSV))
     args = p.parse_args()
+    t0 = time.perf_counter()
 
-    bundle = ensure_model(Path(args.model), Path(args.csv))
-    def_path = ensure_def(Path(args.def_tif), DEF_NC)
-    fire = read_perimeter(args.gpkg, args.event_id, args.index, args.layer)
-    print(f"fire={fire['fire_id']} state={fire['state']} year={fire['year']} "
-          f"DOY=[{fire['start_day']},{fire['end_day']}]", flush=True)
+    try:
+        bundle = ensure_model(Path(args.model), Path(args.csv))
+        def_path = ensure_def(Path(args.def_tif), DEF_NC)
+        fire = read_perimeter(args.gpkg, args.event_id, args.index, args.layer)
+        if fire["year"] < 1986 or fire["year"] > 2020:
+            print(f"Skipping {fire['fire_id']}: year {fire['year']} out of range", flush=True)
+            return 0
+        print(f"fire={fire['fire_id']} state={fire['state']} year={fire['year']} "
+              f"DOY=[{fire['start_day']},{fire['end_day']}]", flush=True)
 
-    cube = fetch_landsat(fire["bbox"], fire["year"], fire["start_day"],
-                         fire["end_day"], args.max_cloud)
-    comp = composite(cube, fire["year"])
-    stack = build_stack(comp, def_path)
-    ds = predict(stack, bundle)
-    ds = to_5070_clip(ds, fire["geometry"])
+        cube = fetch_landsat(fire["bbox"], fire["year"], fire["start_day"],
+                             fire["end_day"], args.max_cloud)
+        comp = composite(cube, fire["year"])
+        stack = build_stack(comp, def_path)
+        ds = predict(stack, bundle)
+        ds = to_5070_clip(ds, fire["geometry"])
+    except Exception as e:
+        elapsed = time.perf_counter() - t0
+        print(f"ERROR after {elapsed:.1f}s: {e}", flush=True)
+        raise
 
     cbi = ds["CBI"].values
     print(f"out: grid={ds.sizes['y']}x{ds.sizes['x']} crs={ds.rio.crs} "
@@ -70,7 +80,9 @@ def main() -> int:
     for name in ("CBI", "CBI_bc"):
         ds[name].rio.to_raster(out / f"{fire['fire_id']}_{name}.tif",
                                tiled=True, compress="ZSTD", zstd_level=1)
-    print(f"wrote {fire['fire_id']}_CBI.tif, _CBI_bc.tif to {out}", flush=True)
+    elapsed = time.perf_counter() - t0
+    print(f"wrote {fire['fire_id']}_CBI.tif, _CBI_bc.tif to {out} in {elapsed/60:.1f} minutes",
+          flush=True)
     return 0
 
 
