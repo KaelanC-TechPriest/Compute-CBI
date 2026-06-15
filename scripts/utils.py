@@ -233,6 +233,51 @@ def _search(bbox, start, end, max_cloud, start_day, end_day):
     return items
 
 
+def _download_raw_scene(item, bbox_4326, out_path: Path) -> bool:
+    """Download the bbox window of a scene in its native projection as a multi-band GeoTIFF.
+
+    Returns True if the file was written, False if the scene doesn't overlap bbox.
+    """
+    epsg = int(item.properties["proj:code"].split(":")[1])
+    tr = item.properties["proj:transform"]
+    sh = item.properties["proj:shape"]
+    H, W = int(sh[0]), int(sh[1])
+    A = Affine(*tr[:6])
+
+    w, s, e, n = bbox_4326
+    minx, miny, maxx, maxy = transform_bounds("EPSG:4326", f"EPSG:{epsg}", w, s, e, n)
+    c0 = max(0, math.floor((minx - A.c) / A.a))
+    c1 = min(W, math.ceil((maxx - A.c) / A.a))
+    r0 = max(0, math.floor((maxy - A.f) / A.e))
+    r1 = min(H, math.ceil((miny - A.f) / A.e))
+    if c1 <= c0 or r1 <= r0:
+        return False
+
+    win = Window(c0, r0, c1 - c0, r1 - r0)  # type: ignore[call-arg]
+    wtr: Affine = A * Affine.translation(c0, r0)  # type: ignore[assignment]
+
+    arrays = []
+    with rasterio.Env(**_GDAL_ENV):  # type: ignore[arg-type]
+        for band in BANDS:
+            with rasterio.open(item.assets[band].href.removeprefix("/vsicurl/")) as ds:
+                arrays.append(ds.read(1, window=win))
+
+    h, w_px = arrays[0].shape
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = out_path.with_suffix(".tmp.tif")
+    with rasterio.open(
+        tmp, "w", driver="GTiff",
+        count=len(BANDS), dtype=arrays[0].dtype,
+        crs=f"EPSG:{epsg}", transform=wtr,
+        width=w_px, height=h,
+        tiled=True, compress="ZSTD", zstd_level=1,
+    ) as ds:
+        for i, arr in enumerate(arrays, start=1):
+            ds.write(arr, i)
+    tmp.replace(out_path)
+    return True
+
+
 def _item_window(item, grid, raw_path: Path | None = None):
     """Read the fire-bbox window of an item, scale + QA-mask, reproject to grid.
 

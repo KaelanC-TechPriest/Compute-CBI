@@ -17,7 +17,6 @@ Run:
 from __future__ import annotations
 
 import argparse
-import math
 import queue
 import sys
 import threading
@@ -27,15 +26,12 @@ from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
-import rasterio
-from affine import Affine
 from rasterio.warp import transform_bounds
-from rasterio.windows import Window
 
 from utils import (
-    BANDS, DEF_NC, DEF_TIF, DEFAULT_MAX_CLOUD, MODEL_PATH, TRAIN_CSV,
+    DEF_NC, DEF_TIF, DEFAULT_MAX_CLOUD, MODEL_PATH, TRAIN_CSV,
     STATE_WINDOWS, WILDFIRE_CODE,
-    _GDAL_ENV, _search,
+    _download_raw_scene, _search,
     build_stack, composite, ensure_def, ensure_model,
     fetch_landsat, predict, raw_scene_path, to_5070_clip,
 )
@@ -49,51 +45,6 @@ def compute_state_bbox(gdf_state: gpd.GeoDataFrame, buffer_m: float = 50_000.0):
     buffered = gdf_state.union_all().buffer(buffer_m)
     minx, miny, maxx, maxy = buffered.bounds
     return transform_bounds("EPSG:5070", "EPSG:4326", minx, miny, maxx, maxy)
-
-
-def _download_raw_scene(item, bbox_4326, out_path: Path) -> bool:
-    """Download the bbox window of a scene in its native projection as a multi-band GeoTIFF.
-
-    Returns True if the file was written, False if the scene doesn't overlap bbox.
-    """
-    epsg = int(item.properties["proj:code"].split(":")[1])
-    tr = item.properties["proj:transform"]
-    sh = item.properties["proj:shape"]
-    H, W = int(sh[0]), int(sh[1])
-    A = Affine(*tr[:6])
-
-    w, s, e, n = bbox_4326
-    minx, miny, maxx, maxy = transform_bounds("EPSG:4326", f"EPSG:{epsg}", w, s, e, n)
-    c0 = max(0, math.floor((minx - A.c) / A.a))
-    c1 = min(W, math.ceil((maxx - A.c) / A.a))
-    r0 = max(0, math.floor((maxy - A.f) / A.e))
-    r1 = min(H, math.ceil((miny - A.f) / A.e))
-    if c1 <= c0 or r1 <= r0:
-        return False
-
-    win = Window(c0, r0, c1 - c0, r1 - r0)  # type: ignore[call-arg]
-    wtr: Affine = A * Affine.translation(c0, r0)  # type: ignore[assignment]
-
-    arrays = []
-    with rasterio.Env(**_GDAL_ENV):  # type: ignore[arg-type]
-        for band in BANDS:
-            with rasterio.open(item.assets[band].href) as ds:
-                arrays.append(ds.read(1, window=win))
-
-    h, w_px = arrays[0].shape
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = out_path.with_suffix(".tmp.tif")
-    with rasterio.open(
-        tmp, "w", driver="GTiff",
-        count=len(BANDS), dtype=arrays[0].dtype,
-        crs=f"EPSG:{epsg}", transform=wtr,
-        width=w_px, height=h,
-        tiled=True, compress="ZSTD", zstd_level=1,
-    ) as ds:
-        for i, arr in enumerate(arrays, start=1):
-            ds.write(arr, i)
-    tmp.replace(out_path)
-    return True
 
 
 def prefetch_state(state: str, state_bbox, years, cache_dir: Path,
