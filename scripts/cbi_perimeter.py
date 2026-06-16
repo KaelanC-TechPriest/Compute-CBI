@@ -61,6 +61,10 @@ def main() -> int:
                    help="Directory for cached Landsat scenes (default: data/landsat_cache).")
     p.add_argument("--clear-cache", action="store_true",
                    help="Delete all cached Landsat scenes before running.")
+    p.add_argument("--start-year", type=int, default=1986,
+                   help="First fire ignition year to process (default: 1986).")
+    p.add_argument("--end-year", type=int, default=2020,
+                   help="Last fire ignition year to process (default: 2020).")
 
     args = p.parse_args()
 
@@ -68,6 +72,12 @@ def main() -> int:
         args.state = args.state.upper()
         if args.state not in STATE_WINDOWS:
             p.error(f"Unknown state '{args.state}'. Known states: {', '.join(sorted(STATE_WINDOWS))}")
+
+    if args.start_year < 1986 or args.start_year > 2020:
+        p.error(f"Start year out of bounds (must be in range 1986-2020)")
+
+    if args.end_year < 1986 or args.end_year > 2020:
+        p.error(f"End year out of bounds (must be in range 1986-2020)")
 
     start_time = time.perf_counter()
 
@@ -121,8 +131,9 @@ def main() -> int:
             fire_id = row["Event_ID"]
 
             year = int(row["Ig_Date"].year)
-            if year < 1986 or year > 2020:
-                print(f"[{i}/{len(gdf)}] Skipping {fire_id}: can't get data for year {year}")
+            if year < args.start_year or year > args.end_year:
+                print(f"[{i}/{len(gdf)}] Skipping {fire_id}: year {year} outside range "
+                      f"{args.start_year}–{args.end_year}")
                 continue
 
             state = str(fire_id)[:2].upper()
