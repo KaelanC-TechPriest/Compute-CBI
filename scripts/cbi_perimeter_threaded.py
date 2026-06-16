@@ -147,6 +147,10 @@ def main() -> int:
                    help="Threads for Phase 1 scene downloads (default: 4).")
     p.add_argument("--fire-workers", type=int, default=4,
                    help="Threads for Phase 2 CBI computation (default: 4).")
+    p.add_argument("--start-year", type=int, default=1986,
+                   help="First fire ignition year to process (default: 1986).")
+    p.add_argument("--end-year", type=int, default=2020,
+                   help="Last fire ignition year to process (default: 2020).")
 
     args = p.parse_args()
 
@@ -154,6 +158,12 @@ def main() -> int:
         args.state = args.state.upper()
         if args.state not in STATE_WINDOWS:
             p.error(f"Unknown state '{args.state}'. Known: {', '.join(sorted(STATE_WINDOWS))}")
+
+    if args.start_year < 1986 or args.start_year > 2020:
+        p.error(f"Start year out of bounds (must be in range 1986-2020)")
+
+    if args.end_year < 1986 or args.end_year > 2020:
+        p.error(f"End year out of bounds (must be in range 1986-2020)")
 
     if args.landsat_cache is None:
         print("warning: --landsat-cache not set; scenes will not be cached between fires", flush=True)
@@ -209,10 +219,13 @@ def main() -> int:
 
     for _, row in gdf.iterrows():
         fire_id = row["Event_ID"]
+
         year = int(row["Ig_Date"].year)
-        if year < 1986 or year > 2020:
-            print(f"  Skipping {fire_id}: year {year} out of range", flush=True)
+        if year < args.start_year or year > args.end_year:
+            print(f"  Skipping {fire_id}: year {year} outside range "
+                  f"{args.start_year}–{args.end_year}", flush=True)
             continue
+
         state = str(fire_id)[:2].upper()
         if state not in STATE_WINDOWS:
             print(f"  Skipping {fire_id}: no image-season window for state {state}", flush=True)
