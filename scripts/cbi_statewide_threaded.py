@@ -136,12 +136,22 @@ def main() -> int:
                    help="Threads for prefetch downloads (default: 4).")
     p.add_argument("--fire-workers", type=int, default=4,
                    help="Threads for CBI computation (default: 4).")
+    p.add_argument("--start-year", type=int, default=1986,
+                   help="First fire ignition year to process (default: 1986).")
+    p.add_argument("--end-year", type=int, default=2020,
+                   help="Last fire ignition year to process (default: 2020).")
 
     args = p.parse_args()
 
     args.state = args.state.upper()
     if args.state not in STATE_WINDOWS:
         p.error(f"Unknown state '{args.state}'. Known states: {', '.join(sorted(STATE_WINDOWS))}")
+
+    if args.start_year < 1986 or args.start_year > 2020:
+        p.error(f"Start year out of bounds (must be in range 1986-2020)")
+
+    if args.end_year < 1986 or args.end_year > 2020:
+        p.error(f"End year out of bounds (must be in range 1986-2020)")
 
     start_time = time.perf_counter()
 
@@ -184,8 +194,8 @@ def main() -> int:
     sd_pre, ed_pre = STATE_WINDOWS[args.state]
     state_bbox = compute_state_bbox(gdf)
     print(f"prefetch: {args.state} bbox={tuple(round(x, 4) for x in state_bbox)}, "
-          f"years 1984-2022", flush=True)
-    prefetch_state(args.state, state_bbox, range(1984, 2023),
+          f"years {args.start_year - 2}-{args.end_year + 2}", flush=True)
+    prefetch_state(args.state, state_bbox, range(args.start_year - 2, args.end_year + 3),
                    landsat_cache, args.max_cloud, sd_pre, ed_pre,
                    n_workers=args.download_workers)
 
@@ -193,8 +203,9 @@ def main() -> int:
     fires = []
     for _, row in gdf.iterrows():
         year = int(row["Ig_Date"].year)
-        if year < 1986 or year > 2020:
-            print(f"  Skipping {row['Event_ID']}: year {year} out of range", flush=True)
+        if year < args.start_year or year > args.end_year:
+            print(f"  Skipping {row['Event_ID']}: year {year} outside range "
+                  f"{args.start_year}–{args.end_year}", flush=True)
             continue
         state = str(row["Event_ID"])[:2].upper()
         if state not in STATE_WINDOWS:
