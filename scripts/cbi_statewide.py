@@ -79,11 +79,6 @@ def main() -> int:
         description="One-shot CBI for one MTBS perimeter OR all fires in a given state."
     )
     p.add_argument("--gpkg", required=True)
-    sel = p.add_mutually_exclusive_group()
-    sel.add_argument("--event-id", default=None,
-                     help="MTBS Event_ID (default: first wildfire).")
-    sel.add_argument("--index", type=int, default=None,
-                     help="0-based row index in the gpkg layer.")
     p.add_argument("--layer", default=None,
                    help="Layer name in the gpkg (default: first layer).")
     p.add_argument("--out-dir", required=True)
@@ -143,16 +138,6 @@ def main() -> int:
 
     if args.state is not None:
         gdf = gdf[gdf["Event_ID"].str[:2].str.upper() == args.state]
-
-    if args.event_id is not None:
-        gdf = gdf[gdf["Event_ID"] == args.event_id]
-        if gdf.empty:  # type: ignore[union-attr]
-            raise SystemExit(f"event-id {args.event_id} not found in {args.gpkg}")
-
-    elif args.index is not None:
-        if not 0 <= args.index < len(gdf):
-            raise SystemExit(f"index {args.index} out of range (0..{len(gdf) - 1})")
-        gdf = gdf.iloc[args.index]  # type: ignore[union-attr]
 
     if gdf.empty:  # type: ignore[union-attr]
         print(f"No wildfires found for state {args.state}, id {args.event_id}, index {args.index}", flush=True)
