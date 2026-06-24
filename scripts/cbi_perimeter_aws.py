@@ -196,6 +196,80 @@ def fetch_landsat(bbox, year, start_day, end_day, max_cloud):
     return cube
 
 
+def lazy_fetch_and_composite(bbox, year, start_day, end_day, max_cloud):
+    """Fetch Landsat scenes and build pre/post composites, downloading Y±2 only if needed.
+
+    Fetches Y-1 and Y+1 first. If the resulting composite still has NaN pixels
+    (e.g. persistent cloud cover), fetches the fallback year(s) — Y-2 for pre,
+    Y+2 for post — and recomputes. This avoids downloading ~half the data for
+    fires with good Y-1/Y+1 coverage.
+    """
+    grid = fire_grid(bbox)
+
+    def _fetch_year(y):
+        items = _search(bbox, f"{y}-01-01", f"{y + 1}-01-01",
+                        max_cloud, start_day, end_day)
+        arrs = []
+        try:
+            for it in items:
+                a = _item_window(it, grid)
+                if a is not None:
+                    arrs.append(a.assign_coords(time=it.datetime).expand_dims("time"))
+        except RasterioIOError as e:
+            if _is_s3_auth_error(e):
+                raise SystemExit(f"error: cannot read Landsat from S3. {_S3_AUTH_HINT}\n"
+                                 f"  (underlying error: {e})")
+            raise
+        return arrs
+
+    def _make_cube(arrs_by_year):
+        all_arrs = [a for al in arrs_by_year.values() for a in al]
+        if not all_arrs:
+            return None
+        c = xr.concat(all_arrs, dim="time", coords="minimal",
+                      compat="override").assign_coords(band=OPTICAL)
+        c.rio.write_crs(f"EPSG:{grid[0]}", inplace=True)
+        return c
+
+    # Fetch preferred years (Y-1, Y+1) first.
+    arrs: dict[int, list] = {}
+    for y in (year - 1, year + 1):
+        yr_arrs = _fetch_year(y)
+        if yr_arrs:
+            arrs[y] = yr_arrs
+            print(f"  landsat Y{y - year:+d}: {len(yr_arrs)} scene(s)", flush=True)
+
+    cube = _make_cube(arrs)
+    if cube is None:
+        raise RuntimeError("no overlapping Landsat scenes found for Y-1 or Y+1")
+
+    comp = composite(cube, year)
+
+    # Only fetch fallback years for whichever composite still has NaN pixels.
+    need_pre  = bool(np.any(np.isnan(comp["pre"].values)))
+    need_post = bool(np.any(np.isnan(comp["post"].values)))
+
+    fetched_fallback = False
+    for y, needed in ((year - 2, need_pre), (year + 2, need_post)):
+        if needed and y not in arrs:
+            label = "pre" if y < year else "post"
+            fb_arrs = _fetch_year(y)
+            if fb_arrs:
+                arrs[y] = fb_arrs
+                print(f"  landsat Y{y - year:+d}: {len(fb_arrs)} scene(s) "
+                      f"(fallback for {label})", flush=True)
+                fetched_fallback = True
+
+    if fetched_fallback:
+        cube = _make_cube(arrs)
+        comp = composite(cube, year)
+
+    total = sum(len(al) for al in arrs.values())
+    print(f"  landsat: {total} scene(s) total, grid "
+          f"{cube.sizes['y']}x{cube.sizes['x']} EPSG:{grid[0]}", flush=True)
+    return comp
+
+
 # =========================================================================== main
 def main() -> int:
     p = argparse.ArgumentParser(
@@ -313,8 +387,7 @@ def main() -> int:
             print(f"[{i}/{n_total}] {fire_id} state={state} year={year} "
                   f"DOY=[{sd},{ed}]", flush=True)
 
-            cube = fetch_landsat(bbox, year, sd, ed, args.max_cloud)
-            comp = composite(cube, year)
+            comp = lazy_fetch_and_composite(bbox, year, sd, ed, args.max_cloud)
             stack = build_stack(comp, def_path)
             ds = predict(stack, bundle)
             ds = to_5070_clip(ds, geom)
