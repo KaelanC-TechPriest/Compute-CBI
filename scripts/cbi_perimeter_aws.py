@@ -99,6 +99,9 @@ def main() -> int:
     if args.state is not None:
         gdf = gdf[gdf["Event_ID"].str[:2].str.upper() == args.state]
 
+    gdf = gdf[(gdf["Ig_Date"].dt.year >= args.start_year) &
+              (gdf["Ig_Date"].dt.year <= args.end_year)]
+
     if args.event_id is not None:
         gdf = gdf[gdf["Event_ID"] == args.event_id]
         if gdf.empty:
@@ -131,12 +134,6 @@ def main() -> int:
         try:
             fire_id = row["Event_ID"]
             year = int(row["Ig_Date"].year)
-
-            if year < args.start_year or year > args.end_year:
-                print(f"[{i}/{n_total}] Skipping {fire_id}: year {year} outside "
-                      f"{args.start_year}-{args.end_year}", flush=True)
-                n_skip += 1
-                continue
 
             state = str(fire_id)[:2].upper()
             if state not in STATE_WINDOWS:
