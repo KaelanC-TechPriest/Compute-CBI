@@ -26,6 +26,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from pathlib import Path
 
 import numpy as np
@@ -55,6 +56,7 @@ def main() -> int:
     p.add_argument("--csv", default=str(TRAIN_CSV))
     args = p.parse_args()
 
+    start_time = time.perf_counter()
     bundle = ensure_model(Path(args.model), Path(args.csv))
     def_path = ensure_def(Path(args.def_tif), DEF_NC)
     fire = read_perimeter(args.gpkg, args.event_id, args.index, args.layer)
@@ -82,7 +84,9 @@ def main() -> int:
     for name in ("CBI", "CBI_bc"):
         ds[name].rio.to_raster(out / f"{fire['fire_id']}_{name}.tif",
                                tiled=True, compress="ZSTD", zstd_level=1)
+    elapsed = (time.perf_counter() - start_time) / 60
     print(f"wrote {fire['fire_id']}_CBI.tif, _CBI_bc.tif to {out}", flush=True)
+    print(f"elapsed: {elapsed:.1f} min", flush=True)
     return 0
 
 
