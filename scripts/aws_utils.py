@@ -205,7 +205,6 @@ def lazy_fetch_and_composite(bbox, year, start_day, end_day, max_cloud):
         yr_arrs = _fetch_year(y)
         if yr_arrs:
             arrs[y] = yr_arrs
-            print(f"  landsat Y{y - year:+d}: {len(yr_arrs)} scene(s)", flush=True)
 
     cube = _make_cube(arrs)
     if cube is None:
