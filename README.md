@@ -11,21 +11,24 @@ Landsat spectral indices + climatic water deficit + latitude.
 ```
 scripts/
 ├── cbi_oneshot.py - The original oneshot file provided by Fred.
+├── cbi_oneshot_aws.py - The oneshot script modified for use on AWS EC2.
 ├── cbi_yearly.py - Uses the perimeter method for each state in a given year.
 ├── cbi_statewide.py - Preemptively caches the entire state.
 ├── cbi_statewide_threaded.py - Same functionality with multithreading.
 ├── cbi_perimeter.py - Caches each fire as it appears in the list.
 ├── cbi_perimeter_threaded.py - Same functionality with multithreading.
+├── cbi_perimeter_aws.py - Single-threaded, no caching, AWS-compatible.
+├── cbi_aws_threaded.py - Multithreaded, no caching, AWS-compatible.
+├── aws_utils.py - A collection of functions for running on AWS.
 └── utils.py - A collection of commonly used functions.
 ```
 
 - `pyproject.toml` + `uv.lock` — the [uv] project definition (deps + pinned lock).
-- `scripts/cbi_oneshot.py` — the entire pipeline in one self-contained file.
 - `parks_2019/data/data_for_ee_model.csv` — RF training table (the model is
   trained from this on first run and cached to `data/model/cbi_rf.joblib`).
 - `data/terraclimate/def_19812010_annual.tif` — the static climatic-water-deficit
   input (so it isn't re-downloaded).
-- `data/fire_perims/test.gpkg` — example MTBS perimeters to run against.
+- `data/fire_perims/` — Should have fire perimeters. Too large to put on github.
 
 ## Setup & run (uses [uv])
 
@@ -39,21 +42,21 @@ uv run python scripts/cbi_oneshot.py --gpkg data/fire_perims/test.gpkg --index 8
 uv reads `pyproject.toml`/`uv.lock`, creates a local `.venv`, installs the pinned deps
 (Python 3.12), and runs — no manual environment step.
 
+- First run trains + caches the model (~15 s); later runs reuse it.
+
 - `--index N` selects the 0-based perimeter in the gpkg; or `--event-id <ID>`;
   default is the first wildfire.
-- `--year Y` — batch mode: process every wildfire in year Y (mutually exclusive with
-  `--event-id`/`--index`). Outputs go under `<out-dir>/<year>/`.
-- Single-fire mode writes `<out-dir>/<Event_ID>_CBI.tif` and `<out-dir>/<Event_ID>_CBI_bc.tif`.
-- First run trains + caches the model (~15 s); later runs reuse it.
-- `--landsat-cache DIR` — directory for cached Landsat scenes
-  (default: `data/landsat_cache`). Scenes are cached on first download and reused
+- Some scripts can cache. Scenes are cached on first download and reused
   on subsequent runs for the same or overlapping fire footprints.
-- `--force-refresh` — ignore the scene cache and re-download everything.
-- `--clear-cache` — delete the cache directory before running.
 
-**Needs internet** — Landsat is streamed from the Microsoft Planetary Computer
-(free, no account). Each new scene is downloaded once and cached locally; later
-runs skip the download for scenes already in the cache.
+> [!NOTE]
+> Caching was abandoned in later script versions due to extremely low cache hit
+> rate.
+
+> [!WARNING] **Needs internet** 
+> Some scripts stream Landsat from the Microsoft Planetary Computer (free, no
+> account). Each new scene is downloaded once and cached locally; later runs
+> skip the download for scenes already in the cache.
 
 ### Example
 
@@ -85,10 +88,7 @@ is the expected signal for a real forested wildfire.
   low/unreliable CBI — the model was built on forested CBI plots.
 - Selecting a perimeter by `--index`/`--event-id` runs it regardless of fire type;
   the default-first-wildfire behavior only applies when neither is given.
-- `scripts/cbi_perimeter.py` normally has 0 cache hits. This suggests that
-  caching is most likely useless if the scenes are only as large as the fire
-  perimeters.
-  * Maybe we don't bother caching for perimeter-wide runs in the future
+- Cache hit rate is extremely low.
 
 # Testing
 
@@ -125,8 +125,7 @@ is the expected signal for a real forested wildfire.
 - [-] Check if we can send a single request to get the whole state or even
     multiple years. (no endpoint exists)
 - [ ] Compute CBI for *only* wildfires
-- [ ] We don't need to download landsat for year of fire
-- [ ] We can check before downloading the second previous or next year
+- [x] We can check before downloading the second previous or next year
 
 ## statewide
 
