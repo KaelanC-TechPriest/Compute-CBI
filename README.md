@@ -58,6 +58,11 @@ uv reads `pyproject.toml`/`uv.lock`, creates a local `.venv`, installs the pinne
 > account). Each new scene is downloaded once and cached locally; later runs
 > skip the download for scenes already in the cache.
 
+> [!WARNING] **AWS needs credentials**
+> AWS script versions require AWS credentials because they download from a
+> landsat S3 bucket. You can set credentials with `aws configure`, creating
+> access keys, or creating/assigning a IAM role.
+
 ### Example
 
 A forested Idaho 2016 wildfire (`Event_ID ID4634811469320160718`, ~21 km²) included
