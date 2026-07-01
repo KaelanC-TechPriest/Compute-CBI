@@ -145,7 +145,7 @@ def main() -> int:
         print("No eligible fires after filtering.", flush=True)
         return 0
 
-    fires.sort(key=lambda f: f["area_m2"], reverse=True)
+    fires.sort(key=lambda f: f["area_m2"])
 
     total = len(fires)
     fire_q: queue.Queue = queue.Queue()
