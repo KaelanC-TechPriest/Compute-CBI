@@ -155,6 +155,7 @@ def main() -> int:
     counts_lock = threading.Lock()
 
     def _worker():
+        tid = threading.current_thread().name
         while True:
             try:
                 i, fire = fire_q.get_nowait()
@@ -166,12 +167,12 @@ def main() -> int:
                 out_cbi = out_base / f"{fire_id}_CBI.tif"
                 out_cbi_bc = out_base / f"{fire_id}_CBI_bc.tif"
                 if out_cbi.exists() and out_cbi_bc.exists():
-                    print(f"[{i}/{total}] Skipping {fire_id}: outputs already exist", flush=True)
+                    print(f"[{tid}:{i}/{total}] Skipping {fire_id}: outputs already exist", flush=True)
                     with counts_lock:
                         counts["skip"] += 1
                     continue
 
-                print(f"[{i}/{total}] {fire_id} state={fire['state']} year={fire['year']} "
+                print(f"[{tid}:{i}/{total}] {fire_id} state={fire['state']} year={fire['year']} "
                       f"DOY=[{fire['start_day']},{fire['end_day']}]", flush=True)
 
                 comp = lazy_fetch_and_composite(
@@ -193,7 +194,7 @@ def main() -> int:
 
                 cbi = ds["CBI"].values
                 del ds
-                print(f"  -> Done {fire_id}: grid={cbi.shape[0]}x{cbi.shape[1]} "
+                print(f"  [{tid}] Done {fire_id}: grid={cbi.shape[0]}x{cbi.shape[1]} "
                       f"valid={int(np.isfinite(cbi).sum())} "
                       f"CBI med={np.nanmedian(cbi):.2f} max={np.nanmax(cbi):.2f}",
                       flush=True)
@@ -202,12 +203,13 @@ def main() -> int:
                     counts["ok"] += 1
 
             except (Exception, SystemExit) as e:
-                print(f"  -> Failed {fire_id}: {type(e).__name__}: {e}\n"
+                print(f"  [{tid}] Failed {fire_id}: {type(e).__name__}: {e}\n"
                       f"{traceback.format_exc()}", flush=True)
                 with counts_lock:
                     counts["err"] += 1
 
-    threads = [threading.Thread(target=_worker, daemon=True) for _ in range(args.workers)]
+    threads = [threading.Thread(target=_worker, daemon=True, name=f"W{i+1}")
+               for i in range(args.workers)]
     for t in threads:
         t.start()
     for t in threads:
