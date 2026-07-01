@@ -180,7 +180,9 @@ def main() -> int:
                     args.max_cloud,
                 )
                 stack = build_stack(comp, def_path)
+                del comp
                 ds = predict(stack, bundle)
+                del stack
                 ds = to_5070_clip(ds, fire["geometry"])
 
                 for name in ("CBI", "CBI_bc"):
@@ -190,10 +192,12 @@ def main() -> int:
                     )
 
                 cbi = ds["CBI"].values
-                print(f"  -> Done {fire_id}: grid={ds.sizes['y']}x{ds.sizes['x']} "
+                del ds
+                print(f"  -> Done {fire_id}: grid={cbi.shape[0]}x{cbi.shape[1]} "
                       f"valid={int(np.isfinite(cbi).sum())} "
                       f"CBI med={np.nanmedian(cbi):.2f} max={np.nanmax(cbi):.2f}",
                       flush=True)
+                del cbi
                 with counts_lock:
                     counts["ok"] += 1
 
