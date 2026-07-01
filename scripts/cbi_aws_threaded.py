@@ -138,11 +138,14 @@ def main() -> int:
             "end_day": ed,
             "geometry": geom,
             "bbox": bbox,
+            "area_m2": geom.area,
         })
 
     if not fires:
         print("No eligible fires after filtering.", flush=True)
         return 0
+
+    fires.sort(key=lambda f: f["area_m2"], reverse=True)
 
     total = len(fires)
     fire_q: queue.Queue = queue.Queue()
