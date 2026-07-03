@@ -124,6 +124,37 @@ is the expected signal for a real forested wildfire.
 - Both runs were incomplete due to issues with landsat data.
 - The state-bounds run started with the first few years cached.
 
+# Memory optimization
+
+We have issues where some fires are too large for the AWS EC2 instances that we
+use. To fix this, out multithreaded AWS script orders the fires from smallest
+to largest. After performing a single run, we discovered the maximum size of
+fires that four workers can simultaneously compute. Those fire ids can be
+cross-referenced in the geopackage to get their sizes as shown below.
+
+## Fires that killed my boy
+
+`sqlite3 /home/kix/work/johnson-lab/Compute-CBI/data/fire_perims/mtbs/mtbs_perims_trimmed.gpkg "SELECT Event_ID, Incid_Name, area_m2, area_acres FROM mtbs_perims_trimmed WHERE Event_ID IN ('MT4643911179319880809','MT4878711426219880906','MT4697011032419901123','MT4803310853419901111');"`
+
+|       Event_ID        |      area_m2         |     area_acres     |
+| --------------------- | ------------------   | -------------------|
+| MT4878711426219880906 |  136967446.5812026   |  33845.395674426698 |
+| MT4643911179319880809 |  145142245.13088387  |  35865.432539965113 |
+| MT4803310853419901111 |   95757366.107284427 |  23662.16225488696 |
+| MT4697011032419901123 |  103849068.49944615  |  25661.665611183042 |
+
+In total, the script was running on 4.817161e8 square meters or 119034.65608 acres when it crashed.
+
+To prevent the script from crashing, we will place a cut-off at 4e8 / (#
+workers)  meters or 100k / (# workers) acres. All fires before the cut-off will
+be placed in the same array and the regular number of workers will operate on
+them as usual. The fires after the cut-off will wait until the workers are
+done, then be processed sequentially (not-parallel).
+
+> [!WARNING] This will not be enough
+> The largest fires are around a million acres. Even Montana's largest fire is
+> over a million.
+
 # Roadmap
 
 ## Global
