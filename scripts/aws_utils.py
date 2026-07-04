@@ -23,12 +23,16 @@ from utils import (
 # ---------------------------------------------------------------------------- constants
 STAC_URL = "https://earth-search.aws.element84.com/v1"
 _GDAL_ENV = {
+    "GDAL_CACHEMAX": "256",   # or 512 (MB). Prevents GDAL from grabbing too
+    # much RAM for HTTP/S3 block caching during reads + warps.
     "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
     # Earth Search hrefs are uppercase `..._SR_B4.TIF`; the allow-list match is
     # case-sensitive, so `.TIF` must be present or GDAL refuses to open them.
     "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.TIF",
     "GDAL_HTTP_MULTIRANGE": "YES",
     "GDAL_HTTP_MERGE_CONSECUTIVE_RANGES": "YES",
+    "GDAL_HTTP_MAX_RETRY": "3",
+    "GDAL_HTTP_RETRY_DELAY": "1",
     # The `usgs-landsat` COG bucket is requester-pays in us-west-2; GDAL's native
     # S3 driver resolves AWS credentials from the env / ~/.aws (no boto3 needed).
     "AWS_REQUEST_PAYER": "requester",
