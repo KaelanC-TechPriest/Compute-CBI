@@ -1,6 +1,7 @@
 """AWS Earth Search helpers for Landsat C2 L2 streaming (requester-pays usgs-landsat)."""
 from __future__ import annotations
 
+import gc
 import math
 import os
 
@@ -171,12 +172,13 @@ def fetch_landsat(bbox, year, start_day, end_day, max_cloud):
 def lazy_fetch_and_composite(bbox, year, start_day, end_day, max_cloud):
     """Fetch Landsat scenes and build pre/post composites, downloading Y±2 only if needed.
 
-    Fetches Y-1 and Y+1 first. If the resulting composite still has NaN pixels
-    (e.g. persistent cloud cover), fetches the fallback year(s) — Y-2 for pre,
-    Y+2 for post — and recomputes. This avoids downloading ~half the data for
-    fires with good Y-1/Y+1 coverage.
+    Processes pre and post phases independently so only one half of the raw data
+    is live at a time, roughly halving peak memory. Each phase fetches the
+    preferred year first (Y-1 for pre, Y+1 for post) and downloads the fallback
+    (Y-2 / Y+2) only when NaN pixels remain.
     """
     grid = fire_grid(bbox)
+    grid_str: str | None = None  # filled on first cube
 
     def _fetch_year(y):
         items = _search(bbox, f"{y}-01-01", f"{y + 1}-01-01",
@@ -203,40 +205,45 @@ def lazy_fetch_and_composite(bbox, year, start_day, end_day, max_cloud):
         c.rio.write_crs(f"EPSG:{grid[0]}", inplace=True)
         return c
 
-    # Fetch preferred years (Y-1, Y+1) first.
-    arrs: dict[int, list] = {}
-    for y in (year - 1, year + 1):
-        yr_arrs = _fetch_year(y)
+    def _phase(preferred_y, fallback_y, slot):
+        """Fetch one composite slot ("pre" or "post"), return its DataArray."""
+        nonlocal grid_str
+        arrs: dict[int, list] = {}
+        yr_arrs = _fetch_year(preferred_y)
         if yr_arrs:
-            arrs[y] = yr_arrs
+            arrs[preferred_y] = yr_arrs
 
-    cube = _make_cube(arrs)
-    if cube is None:
-        raise RuntimeError("no overlapping Landsat scenes found for Y-1 or Y+1")
-
-    comp = composite(cube, year)
-
-    # Only fetch fallback years for whichever composite still has NaN pixels.
-    need_pre  = bool(np.any(np.isnan(comp["pre"].values)))
-    need_post = bool(np.any(np.isnan(comp["post"].values)))
-
-    fetched_fallback = False
-    for y, needed in ((year - 2, need_pre), (year + 2, need_post)):
-        if needed and y not in arrs:
-            label = "pre" if y < year else "post"
-            fb_arrs = _fetch_year(y)
-            if fb_arrs:
-                arrs[y] = fb_arrs
-                print(f"  landsat Y{y - year:+d}: {len(fb_arrs)} scene(s) "
-                      f"(fallback for {label})", flush=True)
-                fetched_fallback = True
-
-    if fetched_fallback:
         cube = _make_cube(arrs)
-        assert cube is not None  # fallback only set when fb_arrs was non-empty
-        comp = composite(cube, year)
+        if cube is None:
+            raise RuntimeError(
+                f"no overlapping Landsat scenes found for Y{preferred_y - year:+d}")
 
-    total = sum(len(al) for al in arrs.values())
-    print(f"  landsat: {total} scene(s) total, grid "
-          f"{cube.sizes['y']}x{cube.sizes['x']} EPSG:{grid[0]}", flush=True)
-    return comp
+        if grid_str is None:
+            grid_str = f"{cube.sizes['y']}x{cube.sizes['x']} EPSG:{grid[0]}"
+
+        comp = composite(cube, year)
+        del cube
+        gc.collect()
+
+        if bool(np.any(np.isnan(comp[slot].values))):
+            fb_arrs = _fetch_year(fallback_y)
+            if fb_arrs:
+                arrs[fallback_y] = fb_arrs
+                print(f"  landsat Y{fallback_y - year:+d}: {len(fb_arrs)} scene(s) "
+                      f"(fallback for {slot})", flush=True)
+                cube = _make_cube(arrs)
+                assert cube is not None
+                comp = composite(cube, year)
+                del cube
+                gc.collect()
+
+        result = comp[slot]
+        total = sum(len(al) for al in arrs.values())
+        print(f"  landsat {slot}: {total} scene(s)", flush=True)
+        return result
+
+    pre_da  = _phase(year - 1, year - 2, "pre")
+    post_da = _phase(year + 1, year + 2, "post")
+
+    print(f"  landsat: grid {grid_str}", flush=True)
+    return xr.Dataset({"pre": pre_da, "post": post_da})
