@@ -388,7 +388,21 @@ def _scene_indices(cube):
 
 
 def composite(cube, year):
-    """Average spectral indices into pre- and post-fire composites relative to fire year."""
+    """Average spectral indices into pre- and post-fire composites relative to fire year.
+
+    Args:
+        cube (xr.DataArray): Multi-temporal Landsat scene cube with a "time" dimension
+            and a "band" coordinate over the OPTICAL indices. Scenes from Y-2 through
+            Y+2 relative to the fire year may be present; only those needed for each
+            slot are used.
+        year (int): Calendar year of the fire. Pre-composite draws from {Y-1} (primary)
+            and {Y-2, Y-1} (fallback fill); post-composite draws from {Y+1} (primary)
+            and {Y+1, Y+2} (fallback fill). Missing years produce NaN pixels.
+
+    Returns:
+        xr.Dataset: Dataset with variables "pre" and "post", each a spatial DataArray
+            of mean spectral indices. CRS is written from the input cube.
+    """
     idx = _scene_indices(cube)
     years = pd.to_datetime(cube.time.values).year.to_numpy()
     nan_slice = xr.full_like(idx.isel(time=0, drop=True), np.nan)
