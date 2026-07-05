@@ -19,6 +19,7 @@ from __future__ import annotations
 import argparse
 import queue
 import sys
+import gc
 import threading
 import time
 import traceback
@@ -185,8 +186,10 @@ def main() -> int:
                 )
                 stack = build_stack(comp, def_path)
                 del comp
+                gc.collect()
                 ds = predict(stack, bundle)
                 del stack
+                gc.collect()
                 ds = to_5070_clip(ds, fire["geometry"])
 
                 for name in ("CBI", "CBI_bc"):
@@ -197,11 +200,13 @@ def main() -> int:
 
                 cbi = ds["CBI"].values
                 del ds
+                gc.collect()
                 print(f"  [{tid}] Done {fire_id}: grid={cbi.shape[0]}x{cbi.shape[1]} "
                       f"valid={int(np.isfinite(cbi).sum())} "
                       f"CBI med={np.nanmedian(cbi):.2f} max={np.nanmax(cbi):.2f}",
                       flush=True)
                 del cbi
+                gc.collect()
                 with counts_lock:
                     counts["ok"] += 1
 
