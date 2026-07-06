@@ -15,6 +15,7 @@ from rasterio.enums import Resampling
 from rasterio.errors import RasterioIOError
 from rasterio.warp import transform_bounds
 from rasterio.windows import Window
+from memory_profiler import profile
 
 from utils import (
     BANDS, COLLECTION, OPTICAL, QA, QA_MASK_BITS, RES, SR_OFFSET, SR_SCALE,
@@ -90,6 +91,7 @@ def _search(bbox, start, end, max_cloud, start_day, end_day):
     return items
 
 
+@profile
 def _item_window(item, grid):
     """Read the fire-bbox window of an item, scale + QA-mask, reproject to grid."""
     g_epsg, g_tr, g_w, g_h = grid
@@ -169,6 +171,7 @@ def fetch_landsat(bbox, year, start_day, end_day, max_cloud):
     return cube
 
 
+@profile
 def lazy_fetch_and_composite(bbox, year, start_day, end_day, max_cloud):
     """Fetch Landsat scenes and build pre/post composites, downloading Y±2 only if needed.
 
