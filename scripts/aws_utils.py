@@ -25,8 +25,7 @@ from utils import (
 # ---------------------------------------------------------------------------- constants
 STAC_URL = "https://earth-search.aws.element84.com/v1"
 _GDAL_ENV = {
-    "GDAL_CACHEMAX": "256",   # or 512 (MB). Prevents GDAL from grabbing too
-    # much RAM for HTTP/S3 block caching during reads + warps.
+    "GDAL_CACHEMAX": 256 * 1024 * 1024,  # 256 MB in bytes; rasterio calls GDALSetCacheMax64() directly so bytes are required.
     "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
     # Earth Search hrefs are uppercase `..._SR_B4.TIF`; the allow-list match is
     # case-sensitive, so `.TIF` must be present or GDAL refuses to open them.
