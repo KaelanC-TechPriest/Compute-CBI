@@ -143,17 +143,42 @@ cross-referenced in the geopackage to get their sizes as shown below.
 | MT4803310853419901111 |   95757366.107284427 |  23662.16225488696 |
 | MT4697011032419901123 |  103849068.49944615  |  25661.665611183042 |
 
-In total, the script was running on 4.817161e8 square meters or 119034.65608 acres when it crashed.
-
-To prevent the script from crashing, we will place a cut-off at 4e8 / (#
-workers)  meters or 100k / (# workers) acres. All fires before the cut-off will
-be placed in the same array and the regular number of workers will operate on
-them as usual. The fires after the cut-off will wait until the workers are
-done, then be processed sequentially (not-parallel).
+In total, the script was running on a total of 4.817161e8 square meters or
+119034.65608 acres when it crashed.
 
 > [!WARNING] This will not be enough
 > The largest fires are around a million acres. Even Montana's largest fire is
 > over a million.
+
+## Top 10 largest fires in CA
+
+|       Event ID        |       Fire Name       | Size (acres) |
+| --------------------- | --------------------- | ------------ |
+| CA3966012280920200817 | AUGUST COMPLEX        | 1,068,793    |
+| CA3987612137920210714 | DIXIE                 | 979,807      |
+| CA3924012311020180727 | RANCH                 | 427,048      |
+| CA3742412156820200816 | SCU LIGHTNING COMPLEX | 405,796      |
+| CA3720111927220200905 | CREEK                 | 381,450      |
+| CA4009112093120200817 | NORTH COMPLEX         | 316,545      |
+| CA3850412233720200817 | HENNESSEY             | 314,230      |
+| CA4062112015220120812 | RUSH                  | 306,811      |
+| CA3442911910020171205 | THOMAS                | 281,983      |
+| CA3293911676620031025 | CEDAR                 | 268,362      |
+
+## Top 10 largest fires in montana
+
+|       Event ID        |        Fire Name        | Size (acres) |
+| --------------------- | ----------------------- | ------------ |
+| MT4566910646920120625 | ASH CREEK               | 253,414      |
+| MT4721710790020170719 | BRIDGE COULEE           | 222,572      |
+| MT4559210981020060822 | DERBY                   | 200,993      |
+| MT4726811348520170724 | RICE RIDGE              | 171,473      |
+| MT4580910676420210808 | RICHARD SPRING          | 168,764      |
+| MT4724011275119880625 | CANYON CREEK            | 167,875      |
+| MT4625810827219840825 | HAWK CREEK              | 157,778      |
+| MT4838610920219911016 | BLAINE C                | 138,192      |
+| MT4751410764220030719 | MISSOURI BREAKS COMPLEX | 137,947      |
+| MT4573810684020120801 | CHALKY                  | 132,681      |
 
 # Roadmap
 
