@@ -23,7 +23,6 @@ from rasterio.enums import Resampling
 from rasterio.warp import transform_bounds
 from rasterio.windows import Window
 from sklearn.ensemble import RandomForestRegressor
-from memory_profiler import profile
 
 # --------------------------------------------------------------------------- paths
 REPO = Path(__file__).resolve().parents[1]
@@ -388,7 +387,6 @@ def _scene_indices(cube):
     return out.assign_coords(index=INDICES).astype("float32").drop_vars("band", errors="ignore")
 
 
-@profile
 def composite(cube, year):
     """Average spectral indices into pre- and post-fire composites relative to fire year.
 
@@ -430,7 +428,6 @@ def _trunc(da):
     return np.trunc(da).astype("float32").drop_vars("index", errors="ignore")
 
 
-@profile
 def build_stack(comp, def_path):
     """Build the 6-band predictor stack (RBR, dNDVI, dMIRBI, post-MIRBI, DEF, lat)."""
     pre, post = comp["pre"], comp["post"]
@@ -467,7 +464,6 @@ def _floor2(a):
     return np.floor(a * 100.0) / 100.0
 
 
-@profile
 def predict(stack, bundle):
     """Run the RF model on the predictor stack and return CBI and bias-corrected CBI."""
     X = stack.sel(band=bundle["predictors"])
@@ -494,7 +490,6 @@ def predict(stack, bundle):
 
 
 # ========================================================================== 5070
-@profile
 def to_5070_clip(ds, geometry):
     """Reproject to EPSG:5070 snapped to the NLCD grid, then clip to the fire perimeter."""
     ox, oy = NLCD_ORIGIN
