@@ -63,6 +63,7 @@ _GDAL_ENV = {
     "GDAL_HTTP_MERGE_CONSECUTIVE_RANGES": "YES",
     "GDAL_HTTP_TIMEOUT": "360",
 }
+PADDING = 1000.0
 
 # ----------------------------------------------------------------------------- mtbs
 SW, WEST, SE, NORTH = (91, 181), (152, 258), (121, 212), (140, 243)

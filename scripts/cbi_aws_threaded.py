@@ -27,15 +27,76 @@ from pathlib import Path
 
 import geopandas as gpd
 import numpy as np
+import xarray as xr
+from shapely import GeometryCollection, MultiPolygon, Polygon
+from shapely.geometry.base import BaseGeometry
 import rioxarray  # noqa: F401  -- registers the `.rio` accessor
 from rasterio.warp import transform_bounds
+from shapely.geometry import box as shapely_box
+from rioxarray.merge import merge_arrays
 
 from utils import (
-    DEF_NC, DEF_TIF, DEFAULT_MAX_CLOUD, MODEL_PATH, STATE_WINDOWS, TRAIN_CSV, WILDFIRE_CODE,
+    DEF_NC, DEF_TIF, DEFAULT_MAX_CLOUD, MODEL_PATH, STATE_WINDOWS, TRAIN_CSV, 
+    WILDFIRE_CODE, PADDING,
     build_stack, ensure_def, ensure_model, predict, to_5070_clip,
 )
 from aws_utils import _aws_creds_available, _S3_AUTH_HINT, lazy_fetch_and_composite
 
+_M2_PER_ACRE: float = 4_046.8564224
+_SPLIT_THRESHOLD_M2: float = 25_000 * _M2_PER_ACRE   # ~101 171 41 m²
+
+def _split_polygon(geom: BaseGeometry, threshold_m2:float) -> list[BaseGeometry]:
+    if geom.area <= threshold_m2: return [geom]
+
+    minx, miny, maxx, maxy = geom.bounds
+    if (maxx - minx >= maxy - miny):
+        mid = (maxx + minx) / 2.0
+        halves = [shapely_box(minx, miny, mid, maxy), shapely_box(mid, miny, maxx, maxy)]
+    else:
+        mid = (maxy + miny) / 2.0
+        halves = [shapely_box(minx, miny, maxx, mid), shapely_box(minx, mid, maxx, maxy)]
+
+    pieces = []
+    for half in halves:
+        piece = geom.intersection(half)
+        if (piece.is_empty or piece.area == 0):
+            continue
+
+        if (isinstance(piece, (MultiPolygon, GeometryCollection))):
+            sub_geoms = [g for g in piece.geoms if g.geom_type == "Polygon"
+                and not (g.is_empty or g.area == 0)]
+        else:
+            sub_geoms = [piece]
+
+        for sub_geom in sub_geoms:
+            pieces.extend(_split_polygon(sub_geom, threshold_m2))
+    return pieces
+
+def _process_piece(
+    piece_geom: BaseGeometry,
+    fire: dict,
+    def_path: Path,
+    bundle: dict,
+    max_cloud: float,
+) -> xr.Dataset | None:
+    minx, miny, maxx, maxy = piece_geom.bounds
+    tid = threading.current_thread().name
+    piece_bbox = transform_bounds("EPSG:5070", "EPSG:4326",
+                                  minx - PADDING, miny - PADDING,
+                                  maxx + PADDING, maxy + PADDING)
+    try:
+        comp = lazy_fetch_and_composite(
+            piece_bbox, fire["year"],
+            fire["start_day"], fire["end_day"],
+            max_cloud,
+        )
+        stack = build_stack(comp, def_path);  del comp; gc.collect()
+        ds    = predict(stack, bundle);       del stack; gc.collect()
+        return to_5070_clip(ds, piece_geom)
+    except Exception as e:
+        print(f"  [{tid}] piece failed {piece_geom.bounds}: {type(e).__name__}: {e}", 
+              flush=True)
+        return None
 
 def main() -> int:
     p = argparse.ArgumentParser(
@@ -128,9 +189,9 @@ def main() -> int:
         sd, ed = STATE_WINDOWS[state]
         geom = row.geometry
         minx, miny, maxx, maxy = geom.bounds
-        b = 1000.0
         bbox = transform_bounds("EPSG:5070", "EPSG:4326",
-                                minx - b, miny - b, maxx + b, maxy + b)
+                                minx - PADDING, miny - PADDING,
+                                maxx + PADDING, maxy + PADDING)
         fires.append({
             "fire_id": fire_id,
             "state": state,
@@ -177,36 +238,53 @@ def main() -> int:
                     continue
 
                 print(f"[{tid}:{i}/{total}] {fire_id} state={fire['state']} year={fire['year']} "
-                      f"DOY=[{fire['start_day']},{fire['end_day']}]", flush=True)
+                          f"DOY=[{fire['start_day']},{fire['end_day']}]", flush=True)
 
-                comp = lazy_fetch_and_composite(
-                    fire["bbox"], fire["year"],
-                    fire["start_day"], fire["end_day"],
-                    args.max_cloud,
-                )
-                stack = build_stack(comp, def_path)
-                del comp
-                gc.collect()
-                ds = predict(stack, bundle)
-                del stack
-                gc.collect()
-                ds = to_5070_clip(ds, fire["geometry"])
+                if fire["area_m2"] > _SPLIT_THRESHOLD_M2:
+                    pieces = _split_polygon(fire["geometry"], _SPLIT_THRESHOLD_M2)
+                    n_acres = fire["area_m2"] / _M2_PER_ACRE
+                    print(f"[{tid}:{i}/{total}] {fire_id} {n_acres:.0f}  acres -> split into {len(pieces)} piece(s)", flush=True)
+
+                    raw_pieces = []
+                    for pi, piece_geom in enumerate(pieces, start=1):
+                        raw_pieces.append(_process_piece(piece_geom, fire, def_path, bundle, args.max_cloud))
+
+                    piece_datasets = [p for p in raw_pieces if p is not None]
+                    del raw_pieces; gc.collect()
+
+                    if not piece_datasets:
+                        raise RuntimeError(f"all {len(pieces)} piece(s) failed for {fire_id}")
+
+                    if len(piece_datasets) == 1:
+                        ds = piece_datasets[0]
+                    else:
+                        cbi_merged    = merge_arrays([p["CBI"]    for p in piece_datasets], nodata=np.nan)
+                        cbi_bc_merged = merge_arrays([p["CBI_bc"] for p in piece_datasets], nodata=np.nan)
+                        ds = xr.Dataset({"CBI": cbi_merged, "CBI_bc": cbi_bc_merged})
+                        ds.rio.write_crs("EPSG:5070", inplace=True)
+                        ds["CBI"].rio.write_nodata(np.nan, inplace=True)
+                        ds["CBI_bc"].rio.write_nodata(np.nan, inplace=True)
+                        del piece_datasets, cbi_merged, cbi_bc_merged; gc.collect()
+
+                else:
+                    comp = lazy_fetch_and_composite(
+                        fire["bbox"], fire["year"],
+                        fire["start_day"], fire["end_day"],
+                        args.max_cloud,
+                    )
+                    stack = build_stack(comp, def_path);  del comp; gc.collect()
+                    ds    = predict(stack, bundle);       del stack; gc.collect()
+                    ds    = to_5070_clip(ds, fire["geometry"])
 
                 for name in ("CBI", "CBI_bc"):
-                    ds[name].rio.to_raster(
-                        out_base / f"{fire_id}_{name}.tif",
-                        tiled=True, compress="ZSTD", zstd_level=1,
-                    )
-
+                    ds[name].rio.to_raster(out_base / f"{fire_id}_{name}.tif", tiled=True, compress="ZSTD", zstd_level=1)
                 cbi = ds["CBI"].values
-                del ds
-                gc.collect()
+                del ds; gc.collect()
                 print(f"  [{tid}] Done {fire_id}: grid={cbi.shape[0]}x{cbi.shape[1]} "
                       f"valid={int(np.isfinite(cbi).sum())} "
                       f"CBI med={np.nanmedian(cbi):.2f} max={np.nanmax(cbi):.2f}",
                       flush=True)
-                del cbi
-                gc.collect()
+                del cbi; gc.collect()
                 with counts_lock:
                     counts["ok"] += 1
 
