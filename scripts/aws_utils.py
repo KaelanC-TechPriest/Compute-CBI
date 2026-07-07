@@ -238,7 +238,7 @@ def lazy_fetch_and_composite(bbox, year, start_day, end_day, max_cloud):
 
         result = comp[slot]
         total = sum(len(al) for al in arrs.values())
-        print(f"  landsat {slot}: {total} scene(s)", flush=True)
+        # print(f"  landsat {slot}: {total} scene(s)", flush=True)
         return result
 
     pre_da  = _phase(year - 1, year - 2, "pre")
