@@ -43,7 +43,7 @@ from utils import (
 from aws_utils import _aws_creds_available, _S3_AUTH_HINT, lazy_fetch_and_composite
 
 _M2_PER_ACRE: float = 4_046.8564224
-_SPLIT_THRESHOLD_M2: float = 25_000 * _M2_PER_ACRE   # ~101 171 41 m²
+_SPLIT_THRESHOLD_M2: float = 100_000 * _M2_PER_ACRE # based on 8GB RAM capacity
 
 def _split_polygon(geom: BaseGeometry, threshold_m2:float) -> list[BaseGeometry]:
     if geom.area <= threshold_m2: return [geom]
@@ -208,6 +208,7 @@ def main() -> int:
         return 0
 
     fires.sort(key=lambda f: f["area_m2"])
+    worker_split_threshold = _SPLIT_THRESHOLD_M2 / args.workers
 
     total = len(fires)
     fire_q: queue.Queue = queue.Queue()
@@ -240,41 +241,32 @@ def main() -> int:
                 print(f"[{tid}:{i}/{total}] {fire_id} state={fire['state']} year={fire['year']} "
                           f"DOY=[{fire['start_day']},{fire['end_day']}]", flush=True)
 
-                if fire["area_m2"] > _SPLIT_THRESHOLD_M2:
-                    pieces = _split_polygon(fire["geometry"], _SPLIT_THRESHOLD_M2)
+                pieces = _split_polygon(fire["geometry"], worker_split_threshold)
+                if len(pieces) > 1:
                     n_acres = fire["area_m2"] / _M2_PER_ACRE
-                    print(f"[{tid}:{i}/{total}] {fire_id} {n_acres:.0f}  acres -> split into {len(pieces)} piece(s)", flush=True)
+                    print(f"[{tid}:{i}/{total}] {fire_id}: {n_acres:.0f} acres -> split into {len(pieces)} piece(s)", flush=True)
 
-                    raw_pieces = []
-                    for pi, piece_geom in enumerate(pieces, start=1):
-                        raw_pieces.append(_process_piece(piece_geom, fire, def_path, bundle, args.max_cloud))
+                raw_pieces = []
+                for pi, piece_geom in enumerate(pieces, start=1):
+                    raw_pieces.append(_process_piece(piece_geom, fire, def_path, bundle, args.max_cloud))
 
-                    piece_datasets = [p for p in raw_pieces if p is not None]
-                    del raw_pieces; gc.collect()
+                piece_datasets = [p for p in raw_pieces if p is not None]
+                del raw_pieces; gc.collect()
 
-                    if not piece_datasets:
-                        raise RuntimeError(f"all {len(pieces)} piece(s) failed for {fire_id}")
+                if not piece_datasets:
+                    raise RuntimeError(f"all {len(pieces)} piece(s) failed for {fire_id}")
 
-                    if len(piece_datasets) == 1:
-                        ds = piece_datasets[0]
-                    else:
-                        cbi_merged    = merge_arrays([p["CBI"]    for p in piece_datasets], nodata=np.nan)
-                        cbi_bc_merged = merge_arrays([p["CBI_bc"] for p in piece_datasets], nodata=np.nan)
-                        ds = xr.Dataset({"CBI": cbi_merged, "CBI_bc": cbi_bc_merged})
-                        ds.rio.write_crs("EPSG:5070", inplace=True)
-                        ds["CBI"].rio.write_nodata(np.nan, inplace=True)
-                        ds["CBI_bc"].rio.write_nodata(np.nan, inplace=True)
-                        del piece_datasets, cbi_merged, cbi_bc_merged; gc.collect()
-
+                if len(piece_datasets) == 1:
+                    ds = piece_datasets.pop()
+                    del piece_datasets
                 else:
-                    comp = lazy_fetch_and_composite(
-                        fire["bbox"], fire["year"],
-                        fire["start_day"], fire["end_day"],
-                        args.max_cloud,
-                    )
-                    stack = build_stack(comp, def_path);  del comp; gc.collect()
-                    ds    = predict(stack, bundle);       del stack; gc.collect()
-                    ds    = to_5070_clip(ds, fire["geometry"])
+                    cbi_merged    = merge_arrays([p["CBI"]    for p in piece_datasets], nodata=np.nan)
+                    cbi_bc_merged = merge_arrays([p["CBI_bc"] for p in piece_datasets], nodata=np.nan)
+                    ds = xr.Dataset({"CBI": cbi_merged, "CBI_bc": cbi_bc_merged})
+                    ds.rio.write_crs("EPSG:5070", inplace=True)
+                    ds["CBI"].rio.write_nodata(np.nan, inplace=True)
+                    ds["CBI_bc"].rio.write_nodata(np.nan, inplace=True)
+                    del piece_datasets, cbi_merged, cbi_bc_merged; gc.collect()
 
                 for name in ("CBI", "CBI_bc"):
                     ds[name].rio.to_raster(out_base / f"{fire_id}_{name}.tif", tiled=True, compress="ZSTD", zstd_level=1)
