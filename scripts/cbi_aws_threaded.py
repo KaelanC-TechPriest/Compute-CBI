@@ -272,7 +272,7 @@ def main() -> int:
                     ds[name].rio.to_raster(out_base / f"{fire_id}_{name}.tif", tiled=True, compress="ZSTD", zstd_level=1)
                 cbi = ds["CBI"].values
                 del ds; gc.collect()
-                print(f"  [{tid}] Done {fire_id}: grid={cbi.shape[0]}x{cbi.shape[1]} "
+                print(f"[{tid}] Done {fire_id}: grid={cbi.shape[0]}x{cbi.shape[1]} "
                       f"valid={int(np.isfinite(cbi).sum())} "
                       f"CBI med={np.nanmedian(cbi):.2f} max={np.nanmax(cbi):.2f}",
                       flush=True)
@@ -281,7 +281,7 @@ def main() -> int:
                     counts["ok"] += 1
 
             except (Exception, SystemExit) as e:
-                print(f"  [{tid}] Failed {fire_id}: {type(e).__name__}: {e}\n"
+                print(f"[{tid}] Failed {fire_id}: {type(e).__name__}: {e}\n"
                       f"{traceback.format_exc()}", flush=True)
                 with counts_lock:
                     counts["err"] += 1
