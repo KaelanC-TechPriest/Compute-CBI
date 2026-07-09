@@ -180,10 +180,10 @@ def lazy_fetch_and_composite(bbox, year, start_day, end_day, max_cloud, debug: b
     grid_str: str | None = None  # filled on first cube
 
     def _fetch_year(y):
-        if debug: print(f"debug: fetching landsat for year {y}")
+        if debug: print(f"debug [_fetch_year]: fetching landsat for year {y}", flush=True)
         items = _search(bbox, f"{y}-01-01", f"{y + 1}-01-01",
                         max_cloud, start_day, end_day)
-        if debug: print(f"debug: got {len(items)} items from year {y}")
+        if debug: print(f"debug [_fetch_year]: got {len(items)} items from year {y}", flush=True)
         arrs = []
         try:
             for it in items:
@@ -199,7 +199,7 @@ def lazy_fetch_and_composite(bbox, year, start_day, end_day, max_cloud, debug: b
 
     def _make_cube(arrs_by_year):
         all_arrs = [a for al in arrs_by_year.values() for a in al]
-        if debug: print(f"debug: making cube with {len(all_arrs)} arrays")
+        if debug: print(f"debug [_make_cube]: making cube with {len(all_arrs)} arrays", flush=True)
         if not all_arrs:
             return None
         c = xr.concat(all_arrs, dim="time", coords="minimal",
@@ -229,7 +229,7 @@ def lazy_fetch_and_composite(bbox, year, start_day, end_day, max_cloud, debug: b
 
         if bool(np.any(np.isnan(comp[slot].values))):
             if debug:
-                print(f"  landsat Y {preferred_y} failed, falling back to Y{fallback_y}", flush=True)
+                print(f"debug [_phase]: landsat Y {preferred_y} failed, falling back to Y{fallback_y}", flush=True)
             fb_arrs = _fetch_year(fallback_y)
             if fb_arrs:
                 arrs[fallback_y] = fb_arrs
@@ -242,12 +242,12 @@ def lazy_fetch_and_composite(bbox, year, start_day, end_day, max_cloud, debug: b
         result = comp[slot]
         total = sum(len(al) for al in arrs.values())
         if debug:
-            print(f"  landsat {slot}: {total} scene(s)", flush=True)
+            print(f"debug [_phase]: landsat {slot}: {total} scene(s)", flush=True)
         return result
 
     pre_da  = _phase(year - 1, year - 2, "pre")
     post_da = _phase(year + 1, year + 2, "post")
 
     if debug:
-        print(f"  landsat: grid {grid_str}", flush=True)
+        print(f"debug [lazy_fetch_and_composite]: landsat: grid {grid_str}", flush=True)
     return xr.Dataset({"pre": pre_da, "post": post_da})

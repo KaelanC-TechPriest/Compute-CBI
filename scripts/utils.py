@@ -412,8 +412,8 @@ def composite(cube, year, debug=False):
         unique_years, counts = np.unique(years, return_counts=True)
         for y, cnt in zip(unique_years, counts):
             rel = y - year
-            tag = f"Y{rel:+d}" if rel != 0 else f"Y+0={y} (fire year, unused)"
-            print(f"  composite: {tag}: {cnt} scene(s)", flush=True)
+            tag = f"Y{rel:+d}={y}" if rel != 0 else f"Y+0={y} (fire year, unused)"
+            print(f"debug [composite]: {tag}: {cnt} scene(s)", flush=True)
 
     def wmean(yset):
         m = np.isin(years, list(yset))
@@ -429,7 +429,7 @@ def composite(cube, year, debug=False):
     if debug:
         pre_nan = float(np.isnan(pre.values).mean()) * 100
         post_nan = float(np.isnan(post.values).mean()) * 100
-        print(f"  composite: pre NaN={pre_nan:.1f}%  post NaN={post_nan:.1f}%", flush=True)
+        print(f"debug [composite]: pre NaN={pre_nan:.1f}%  post NaN={post_nan:.1f}%", flush=True)
 
     ds = xr.Dataset({"pre": pre, "post": post}).drop_vars("band", errors="ignore")
     ds["pre"].rio.write_crs(cube.rio.crs, inplace=True)

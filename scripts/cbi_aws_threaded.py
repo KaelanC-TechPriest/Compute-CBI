@@ -249,10 +249,11 @@ def main() -> int:
                 pieces = _split_polygon(fire["geometry"], worker_split_threshold)
                 if args.debug and len(pieces) > 1:
                     n_acres = fire["area_m2"] / _M2_PER_ACRE
-                    print(f"[{tid}:{i}/{total}] {fire_id}: {n_acres:.0f} acres -> split into {len(pieces)} piece(s)", flush=True)
+                    print(f"debug [_worker]: {fire_id}: {n_acres:.0f} acres -> split into {len(pieces)} piece(s)", flush=True)
 
                 raw_pieces = []
                 for pi, piece_geom in enumerate(pieces, start=1):
+                    if args.debug: print(f"debug [_worker]: processing piece {pi}")
                     raw_pieces.append(_process_piece(piece_geom, fire, def_path, bundle, args.max_cloud, debug=args.debug))
 
                 piece_datasets = [p for p in raw_pieces if p is not None]
