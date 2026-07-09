@@ -196,6 +196,7 @@ def lazy_fetch_and_composite(bbox, year, start_day, end_day, max_cloud, debug: b
                 raise SystemExit(f"error: cannot read Landsat from S3. {_S3_AUTH_HINT}\n"
                                  f"  (underlying error: {e})")
             raise
+        if debug: print(f"debug [_fetch_year]: {len(arrs)}/{len(items)} scenes overlap grid for year {y}", flush=True)
         return arrs
 
     def _make_cube(arrs_by_year):

@@ -417,6 +417,8 @@ def composite(cube, year, debug=False):
 
     def wmean(yset):
         m = np.isin(years, list(yset))
+        if debug:
+            print(f"debug [composite.wmean]: years={sorted(yset)} matched {int(m.sum())} scene(s)", flush=True)
         if not m.any():
             return nan_slice
         with warnings.catch_warnings():
