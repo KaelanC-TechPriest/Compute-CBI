@@ -407,6 +407,8 @@ def composite(cube, year, debug=False):
     idx = _scene_indices(cube)
     years = pd.to_datetime(cube.time.values).year.to_numpy()
     nan_slice = xr.full_like(idx.isel(time=0, drop=True), np.nan)
+    if debug:
+        print(f"debug [composite]: cube shape={dict(cube.sizes)} dtype={cube.dtype}", flush=True)
 
     if debug:
         unique_years, counts = np.unique(years, return_counts=True)
@@ -423,7 +425,12 @@ def composite(cube, year, debug=False):
             return nan_slice
         with warnings.catch_warnings():
             warnings.simplefilter("ignore", RuntimeWarning)
-            return idx.isel(time=m).mean("time", skipna=True)
+            if debug:
+                print(f"debug [composite.wmean]: computing mean over {int(m.sum())} scenes...", flush=True)
+            result = idx.isel(time=m).mean("time", skipna=True)
+            if debug:
+                print(f"debug [composite.wmean]: mean done, shape={dict(result.sizes)}", flush=True)
+            return result
 
     pre = wmean({year - 1}).combine_first(wmean({year - 2, year - 1}))
     post = wmean({year + 1}).combine_first(wmean({year + 1, year + 2}))
