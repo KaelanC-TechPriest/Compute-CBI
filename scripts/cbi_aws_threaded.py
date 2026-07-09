@@ -123,6 +123,8 @@ def main() -> int:
                    help="Worker threads (search + download + process per fire, default: 4).")
     p.add_argument("--debug", action="store_true", default=False,
                    help="Enable verbose debug output (scene counts, grid info, fallback fetches).")
+    p.add_argument("--exclude-list", default=None,
+                   help="Path to a text file with one Event_ID per line to skip.")
     p.add_argument("--start-year", type=int, default=1986,
                    help="First fire ignition year to process (default: 1986).")
     p.add_argument("--end-year", type=int, default=2020,
@@ -151,6 +153,12 @@ def main() -> int:
     bundle["model"].n_jobs = 1  # no joblib sub-threads inside worker threads
     def_path = ensure_def(Path(args.def_tif), DEF_NC)
 
+    exclude_ids: set[str] = set()
+    if args.exclude_list is not None:
+        with open(args.exclude_list) as f:
+            exclude_ids = {line.strip() for line in f if line.strip()}
+
+    # ===================== FILTERING ========================================
     gdf = gpd.read_file(args.gpkg, layer=args.layer).to_crs(5070)
     gdf = gdf[gdf["Incid_Type"] == WILDFIRE_CODE]
 
@@ -173,6 +181,9 @@ def main() -> int:
         print(f"No wildfires found for state={args.state} event_id={args.event_id} "
               f"index={args.index}", flush=True)
         return 0
+
+    if exclude_ids:
+        gdf = gdf[~gdf["Event_ID"].isin(exclude_ids)]
 
     state_str = f" in {args.state}" if args.state else ""
     print(f"Found {len(gdf)} wildfire(s){state_str}.", flush=True)
