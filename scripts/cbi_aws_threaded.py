@@ -78,6 +78,7 @@ def _process_piece(
     def_path: Path,
     bundle: dict,
     max_cloud: float,
+    debug: bool = False,
 ) -> xr.Dataset | None:
     minx, miny, maxx, maxy = piece_geom.bounds
     tid = threading.current_thread().name
@@ -89,6 +90,7 @@ def _process_piece(
             piece_bbox, fire["year"],
             fire["start_day"], fire["end_day"],
             max_cloud,
+            debug=debug,
         )
         stack = build_stack(comp, def_path);  del comp; gc.collect()
         ds    = predict(stack, bundle);       del stack; gc.collect()
@@ -119,6 +121,8 @@ def main() -> int:
                    help="2-letter state abbreviation (e.g. MT, NV) to filter fires by state.")
     p.add_argument("--workers", type=int, default=4,
                    help="Worker threads (search + download + process per fire, default: 4).")
+    p.add_argument("--debug", action="store_true", default=False,
+                   help="Enable verbose debug output (scene counts, grid info, fallback fetches).")
     p.add_argument("--start-year", type=int, default=1986,
                    help="First fire ignition year to process (default: 1986).")
     p.add_argument("--end-year", type=int, default=2020,
@@ -216,6 +220,7 @@ def main() -> int:
         fire_q.put((i, fire))
 
     print(f"Processing {total} fire(s){state_str} with {args.workers} worker(s) ...", flush=True)
+    print(f"Size threshold: {worker_split_threshold}")
 
     counts = {"ok": 0, "skip": 0, "err": 0}
     counts_lock = threading.Lock()
@@ -242,13 +247,13 @@ def main() -> int:
                           f"DOY=[{fire['start_day']},{fire['end_day']}]", flush=True)
 
                 pieces = _split_polygon(fire["geometry"], worker_split_threshold)
-                if len(pieces) > 1:
+                if args.debug and len(pieces) > 1:
                     n_acres = fire["area_m2"] / _M2_PER_ACRE
                     print(f"[{tid}:{i}/{total}] {fire_id}: {n_acres:.0f} acres -> split into {len(pieces)} piece(s)", flush=True)
 
                 raw_pieces = []
                 for pi, piece_geom in enumerate(pieces, start=1):
-                    raw_pieces.append(_process_piece(piece_geom, fire, def_path, bundle, args.max_cloud))
+                    raw_pieces.append(_process_piece(piece_geom, fire, def_path, bundle, args.max_cloud, debug=args.debug))
 
                 piece_datasets = [p for p in raw_pieces if p is not None]
                 del raw_pieces; gc.collect()

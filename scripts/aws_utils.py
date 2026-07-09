@@ -164,11 +164,11 @@ def fetch_landsat(bbox, year, start_day, end_day, max_cloud):
                      compat="override").assign_coords(band=OPTICAL)
     cube.rio.write_crs(f"EPSG:{grid[0]}", inplace=True)
     # print(f"  landsat: {cube.sizes['time']} scenes, grid "
-          f"{cube.sizes['y']}x{cube.sizes['x']} EPSG:{grid[0]}", flush=True)
+    #       f"{cube.sizes['y']}x{cube.sizes['x']} EPSG:{grid[0]}", flush=True)
     return cube
 
 
-def lazy_fetch_and_composite(bbox, year, start_day, end_day, max_cloud):
+def lazy_fetch_and_composite(bbox, year, start_day, end_day, max_cloud, debug: bool = False):
     """Fetch Landsat scenes and build pre/post composites, downloading Y±2 only if needed.
 
     Processes pre and post phases independently so only one half of the raw data
@@ -228,8 +228,9 @@ def lazy_fetch_and_composite(bbox, year, start_day, end_day, max_cloud):
             fb_arrs = _fetch_year(fallback_y)
             if fb_arrs:
                 arrs[fallback_y] = fb_arrs
-                # print(f"  landsat Y{fallback_y - year:+d}: {len(fb_arrs)} scene(s) "
-                #       f"(fallback for {slot})", flush=True)
+                if debug:
+                    print(f"  landsat Y{fallback_y - year:+d}: {len(fb_arrs)} scene(s) "
+                          f"(fallback for {slot})", flush=True)
                 cube = _make_cube(arrs)
                 assert cube is not None
                 comp = composite(cube, year)
@@ -238,11 +239,13 @@ def lazy_fetch_and_composite(bbox, year, start_day, end_day, max_cloud):
 
         result = comp[slot]
         total = sum(len(al) for al in arrs.values())
-        # print(f"  landsat {slot}: {total} scene(s)", flush=True)
+        if debug:
+            print(f"  landsat {slot}: {total} scene(s)", flush=True)
         return result
 
     pre_da  = _phase(year - 1, year - 2, "pre")
     post_da = _phase(year + 1, year + 2, "post")
 
-    # print(f"  landsat: grid {grid_str}", flush=True)
+    if debug:
+        print(f"  landsat: grid {grid_str}", flush=True)
     return xr.Dataset({"pre": pre_da, "post": post_da})
