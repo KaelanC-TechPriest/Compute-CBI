@@ -6,6 +6,7 @@ import math
 import os
 
 import numpy as np
+import pystac
 import pystac_client
 import rasterio
 import rioxarray  # noqa: F401  -- registers the `.rio` accessor
@@ -89,7 +90,7 @@ def _search(bbox, start, end, max_cloud, start_day, end_day):
     return items
 
 
-def _item_window(item, grid):
+def _item_window(item: pystac.Item, grid: tuple[int, Affine, int, int]) -> xr.DataArray | None:
     """Read the fire-bbox window of an item, scale + QA-mask, reproject to grid."""
     g_epsg, g_tr, g_w, g_h = grid
     epsg = int(item.properties["proj:code"].split(":")[1])
