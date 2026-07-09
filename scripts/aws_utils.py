@@ -180,8 +180,10 @@ def lazy_fetch_and_composite(bbox, year, start_day, end_day, max_cloud, debug: b
     grid_str: str | None = None  # filled on first cube
 
     def _fetch_year(y):
+        if debug: print(f"debug: fetching landsat for year {y}")
         items = _search(bbox, f"{y}-01-01", f"{y + 1}-01-01",
                         max_cloud, start_day, end_day)
+        if debug: print(f"debug: got {len(items)} items from year {y}")
         arrs = []
         try:
             for it in items:
@@ -197,6 +199,7 @@ def lazy_fetch_and_composite(bbox, year, start_day, end_day, max_cloud, debug: b
 
     def _make_cube(arrs_by_year):
         all_arrs = [a for al in arrs_by_year.values() for a in al]
+        if debug: print(f"debug: making cube with {len(all_arrs)} arrays")
         if not all_arrs:
             return None
         c = xr.concat(all_arrs, dim="time", coords="minimal",
@@ -220,20 +223,19 @@ def lazy_fetch_and_composite(bbox, year, start_day, end_day, max_cloud, debug: b
         if grid_str is None:
             grid_str = f"{cube.sizes['y']}x{cube.sizes['x']} EPSG:{grid[0]}"
 
-        comp = composite(cube, year)
+        comp = composite(cube, year, debug=debug)
         del cube
         gc.collect()
 
         if bool(np.any(np.isnan(comp[slot].values))):
+            if debug:
+                print(f"  landsat Y {preferred_y} failed, falling back to Y{fallback_y}", flush=True)
             fb_arrs = _fetch_year(fallback_y)
             if fb_arrs:
                 arrs[fallback_y] = fb_arrs
-                if debug:
-                    print(f"  landsat Y{fallback_y - year:+d}: {len(fb_arrs)} scene(s) "
-                          f"(fallback for {slot})", flush=True)
                 cube = _make_cube(arrs)
                 assert cube is not None
-                comp = composite(cube, year)
+                comp = composite(cube, year, debug=debug)
                 del cube
                 gc.collect()
 

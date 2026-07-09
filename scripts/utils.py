@@ -388,7 +388,7 @@ def _scene_indices(cube):
     return out.assign_coords(index=INDICES).astype("float32").drop_vars("band", errors="ignore")
 
 
-def composite(cube, year):
+def composite(cube, year, debug=False):
     """Average spectral indices into pre- and post-fire composites relative to fire year.
 
     Args:
@@ -408,6 +408,13 @@ def composite(cube, year):
     years = pd.to_datetime(cube.time.values).year.to_numpy()
     nan_slice = xr.full_like(idx.isel(time=0, drop=True), np.nan)
 
+    if debug:
+        unique_years, counts = np.unique(years, return_counts=True)
+        for y, cnt in zip(unique_years, counts):
+            rel = y - year
+            tag = f"Y{rel:+d}" if rel != 0 else f"Y+0={y} (fire year, unused)"
+            print(f"  composite: {tag}: {cnt} scene(s)", flush=True)
+
     def wmean(yset):
         m = np.isin(years, list(yset))
         if not m.any():
@@ -418,6 +425,12 @@ def composite(cube, year):
 
     pre = wmean({year - 1}).combine_first(wmean({year - 2, year - 1}))
     post = wmean({year + 1}).combine_first(wmean({year + 1, year + 2}))
+
+    if debug:
+        pre_nan = float(np.isnan(pre.values).mean()) * 100
+        post_nan = float(np.isnan(post.values).mean()) * 100
+        print(f"  composite: pre NaN={pre_nan:.1f}%  post NaN={post_nan:.1f}%", flush=True)
+
     ds = xr.Dataset({"pre": pre, "post": post}).drop_vars("band", errors="ignore")
     ds["pre"].rio.write_crs(cube.rio.crs, inplace=True)
     ds["post"].rio.write_crs(cube.rio.crs, inplace=True)

@@ -220,7 +220,7 @@ def main() -> int:
         fire_q.put((i, fire))
 
     print(f"Processing {total} fire(s){state_str} with {args.workers} worker(s) ...", flush=True)
-    print(f"Size threshold: {worker_split_threshold}")
+    print(f"Size threshold: {worker_split_threshold} m^2")
 
     counts = {"ok": 0, "skip": 0, "err": 0}
     counts_lock = threading.Lock()
