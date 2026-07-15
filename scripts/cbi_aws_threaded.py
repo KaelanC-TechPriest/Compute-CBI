@@ -46,9 +46,10 @@ _M2_PER_ACRE: float = 4_046.8564224
 _SPLIT_THRESHOLD_M2: float = 100_000 * _M2_PER_ACRE # based on 8GB RAM capacity
 
 def _split_polygon(geom: BaseGeometry, threshold_m2:float) -> list[BaseGeometry]:
-    if geom.area <= threshold_m2: return [geom]
-
     minx, miny, maxx, maxy = geom.bounds
+    bbox_area = (maxx - minx) * (maxy - miny)
+    if bbox_area <= threshold_m2: return [geom]
+
     if (maxx - minx >= maxy - miny):
         mid = (maxx + minx) / 2.0
         halves = [shapely_box(minx, miny, mid, maxy), shapely_box(mid, miny, maxx, maxy)]
