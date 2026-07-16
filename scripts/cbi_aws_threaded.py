@@ -43,7 +43,7 @@ from utils import (
 from aws_utils import _aws_creds_available, _S3_AUTH_HINT, lazy_fetch_and_composite
 
 _M2_PER_ACRE: float = 4_046.8564224
-_SPLIT_THRESHOLD_M2: float = 100_000 * _M2_PER_ACRE # based on 8GB RAM capacity
+_SPLIT_THRESHOLD_M2: float = 150_000 * _M2_PER_ACRE # based on 8GB RAM capacity
 
 def _split_polygon(geom: BaseGeometry, threshold_m2:float) -> list[BaseGeometry]:
     minx, miny, maxx, maxy = geom.bounds
@@ -223,7 +223,6 @@ def main() -> int:
         print("No eligible fires after filtering.", flush=True)
         return 0
 
-    fires.sort(key=lambda f: f["area_m2"])
     worker_split_threshold = _SPLIT_THRESHOLD_M2 / args.workers
 
     total = len(fires)
