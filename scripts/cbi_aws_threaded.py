@@ -137,11 +137,11 @@ def main() -> int:
         if args.state not in STATE_WINDOWS:
             p.error(f"Unknown state '{args.state}'. Known states: {', '.join(sorted(STATE_WINDOWS))}")
 
-    if args.start_year < 1986 or args.start_year > 2020:
-        p.error("Start year out of bounds (must be in range 1986-2020)")
+    if args.start_year < 1986 or args.start_year > 2024:
+        p.error("Start year out of bounds (must be in range 1986-2024)")
 
-    if args.end_year < 1986 or args.end_year > 2020:
-        p.error("End year out of bounds (must be in range 1986-2020)")
+    if args.end_year < 1986 or args.end_year > 2024:
+        p.error("End year out of bounds (must be in range 1986-2024)")
 
     if not _aws_creds_available():
         print(f"warning: no AWS credentials detected. {_S3_AUTH_HINT}\n"
