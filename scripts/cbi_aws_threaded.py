@@ -128,7 +128,7 @@ def main() -> int:
                    help="Path to a text file with one Event_ID per line to skip.")
     p.add_argument("--start-year", type=int, default=1986,
                    help="First fire ignition year to process (default: 1986).")
-    p.add_argument("--end-year", type=int, default=2020,
+    p.add_argument("--end-year", type=int, default=2024,
                    help="Last fire ignition year to process (default: 2020).")
     args = p.parse_args()
 
