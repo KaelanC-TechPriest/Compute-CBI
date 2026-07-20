@@ -118,8 +118,8 @@ def main() -> int:
     p.add_argument("--model", default=str(MODEL_PATH))
     p.add_argument("--def", dest="def_tif", default=str(DEF_TIF))
     p.add_argument("--csv", default=str(TRAIN_CSV))
-    p.add_argument("--state", default=None,
-                   help="2-letter state abbreviation (e.g. MT, NV) to filter fires by state.")
+    p.add_argument("--state", type=str, default=None,
+                   help="List of comma-separated 2-letter state abbreviations (e.g. MT,NV).")
     p.add_argument("--workers", type=int, default=4,
                    help="Worker threads (search + download + process per fire, default: 4).")
     p.add_argument("--debug", action="store_true", default=False,
@@ -129,13 +129,15 @@ def main() -> int:
     p.add_argument("--start-year", type=int, default=1986,
                    help="First fire ignition year to process (default: 1986).")
     p.add_argument("--end-year", type=int, default=2024,
-                   help="Last fire ignition year to process (default: 2020).")
+                   help="Last fire ignition year to process (default: 2024).")
     args = p.parse_args()
 
+    states: list[str] = []
     if args.state is not None:
-        args.state = args.state.upper()
-        if args.state not in STATE_WINDOWS:
-            p.error(f"Unknown state '{args.state}'. Known states: {', '.join(sorted(STATE_WINDOWS))}")
+        states = [s.strip() for s in args.state.upper().split(',') if s.strip()]
+        unknown = [s for s in states if s not in STATE_WINDOWS]
+        if unknown:
+            p.error(f"Unknown state(s) '{", ".join(unknown)}'. Known states: {', '.join(sorted(STATE_WINDOWS))}")
 
     if args.start_year < 1986 or args.start_year > 2024:
         p.error("Start year out of bounds (must be in range 1986-2024)")
@@ -163,8 +165,8 @@ def main() -> int:
     gdf = gpd.read_file(args.gpkg, layer=args.layer).to_crs(5070)
     gdf = gdf[gdf["Incid_Type"] == WILDFIRE_CODE]
 
-    if args.state is not None:
-        gdf = gdf[gdf["Event_ID"].str[:2].str.upper() == args.state]
+    if states:
+        gdf = gdf[gdf["Event_ID"].str[:2].str.upper().isin(states)]
 
     gdf = gdf[(gdf["Ig_Date"].dt.year >= args.start_year) &
               (gdf["Ig_Date"].dt.year <= args.end_year)]
@@ -179,20 +181,21 @@ def main() -> int:
         gdf = gdf.iloc[[args.index]]
 
     if gdf.empty:
-        print(f"No wildfires found for state={args.state} event_id={args.event_id} "
-              f"index={args.index}", flush=True)
+        print(f"No wildfires found for state(s)=({", ".join(states)})"
+            f" | event_id={args.event_id} "
+            f" | index={args.index}", flush=True)
         return 0
 
     if exclude_ids:
         gdf = gdf[~gdf["Event_ID"].isin(exclude_ids)]
 
-    state_str = f" in {args.state}" if args.state else ""
+    state_str = f" in {", ".join(states)}" if states else ""
     print(f"Found {len(gdf)} wildfire(s){state_str}.", flush=True)
 
     out_base = Path(args.out_dir)
-    if args.state:
-        out_base = out_base / args.state
-    out_base.mkdir(parents=True, exist_ok=True)
+
+    for state in states:
+        (out_base / state).mkdir(parents=True, exist_ok=True)
 
     fires: list[dict] = []
     for _, row in gdf.iterrows():
@@ -246,8 +249,8 @@ def main() -> int:
 
             fire_id = fire["fire_id"]
             try:
-                out_cbi = out_base / f"{fire_id}_CBI.tif"
-                out_cbi_bc = out_base / f"{fire_id}_CBI_bc.tif"
+                out_cbi = out_base / fire["state"] / f"{fire_id}_CBI.tif"
+                out_cbi_bc = out_base / fire["state"] / f"{fire_id}_CBI_bc.tif"
                 if out_cbi.exists() and out_cbi_bc.exists():
                     print(f"[{tid}:{i}/{total}] Skipping {fire_id}: outputs already exist", flush=True)
                     with counts_lock:
@@ -285,8 +288,10 @@ def main() -> int:
                     ds["CBI_bc"].rio.write_nodata(np.nan, inplace=True)
                     del piece_datasets, cbi_merged, cbi_bc_merged; gc.collect()
 
-                for name in ("CBI", "CBI_bc"):
-                    ds[name].rio.to_raster(out_base / f"{fire_id}_{name}.tif", tiled=True, compress="ZSTD", zstd_level=1)
+                out_cbi.parent.mkdir(parents=True, exist_ok=True)
+                out_cbi_bc.parent.mkdir(parents=True, exist_ok=True)
+                ds["CBI"].rio.to_raster(out_cbi, tiled=True, compress="ZSTD", zstd_level=1)
+                ds["CBI_bc"].rio.to_raster(out_cbi_bc, tiled=True, compress="ZSTD", zstd_level=1)
                 cbi = ds["CBI"].values
                 del ds; gc.collect()
                 print(f"[{tid}] Done {fire_id}: grid={cbi.shape[0]}x{cbi.shape[1]} "
