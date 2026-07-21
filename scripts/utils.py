@@ -78,6 +78,11 @@ STATE_WINDOWS: dict[str, tuple[int, int]] = {
     "ME": NORTH, "MI": NORTH, "MN": NORTH, "NH": NORTH, "VT": NORTH, "WI": NORTH,
 }
 WILDFIRE_CODE = 1
+# 0 - Unknown
+# 1 - Wildfire
+# 2 - Prescribed burn
+# 3 - Wildfire that was allowed to burn
+WILDFIRE_CODES = (0, 1, 3)
 
 # ----------------------------------------------------------------------------- 5070
 NLCD_ORIGIN = (-2493045.0, 3310005.0)

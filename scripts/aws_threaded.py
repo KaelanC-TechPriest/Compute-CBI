@@ -37,7 +37,7 @@ from rioxarray.merge import merge_arrays
 
 from utils import (
     DEF_NC, DEF_TIF, DEFAULT_MAX_CLOUD, MODEL_PATH, STATE_WINDOWS, TRAIN_CSV, 
-    WILDFIRE_CODE, PADDING,
+    WILDFIRE_CODES, PADDING,
     build_stack, ensure_def, ensure_model, predict, to_5070_clip,
 )
 from aws_utils import _aws_creds_available, _S3_AUTH_HINT, lazy_fetch_and_composite
@@ -163,7 +163,7 @@ def main() -> int:
 
     # ===================== FILTERING ========================================
     gdf = gpd.read_file(args.gpkg, layer=args.layer).to_crs(5070)
-    gdf = gdf[gdf["Incid_Type"] == WILDFIRE_CODE]
+    gdf = gdf[gdf["Incid_Type"].isin(WILDFIRE_CODES)]
 
     if states:
         gdf = gdf[gdf["Event_ID"].str[:2].str.upper().isin(states)]
