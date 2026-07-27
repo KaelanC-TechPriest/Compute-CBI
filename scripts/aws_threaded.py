@@ -194,8 +194,8 @@ def main() -> int:
 
     out_base = Path(args.out_dir)
 
-    for state in states:
-        (out_base / state).mkdir(parents=True, exist_ok=True)
+    for year in range(args.start_year, args.end_year + 1):
+        (out_base / str(year)).mkdir(parents=True, exist_ok=True)
 
     fires: list[dict] = []
     for _, row in gdf.iterrows():
@@ -249,8 +249,8 @@ def main() -> int:
 
             fire_id = fire["fire_id"]
             try:
-                out_cbi = out_base / fire["state"] / f"{fire_id}_CBI.tif"
-                out_cbi_bc = out_base / fire["state"] / f"{fire_id}_CBI_bc.tif"
+                out_cbi = out_base / str(fire["year"]) / f"{fire_id}_CBI.tif"
+                out_cbi_bc = out_base / str(fire["year"]) / f"{fire_id}_CBI_bc.tif"
                 if out_cbi.exists() and out_cbi_bc.exists():
                     print(f"[{tid}:{i}/{total}] Skipping {fire_id}: outputs already exist", flush=True)
                     with counts_lock:
