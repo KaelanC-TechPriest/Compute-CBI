@@ -22,6 +22,7 @@ from pyproj import Transformer
 from rasterio.enums import Resampling
 from rasterio.warp import transform_bounds
 from rasterio.windows import Window
+from rioxarray.exceptions import NoDataInBounds
 from sklearn.ensemble import RandomForestRegressor
 
 # --------------------------------------------------------------------------- paths
@@ -519,7 +520,11 @@ def predict(stack, bundle):
 
 # ========================================================================== 5070
 def to_5070_clip(ds, geometry):
-    """Reproject to EPSG:5070 snapped to the NLCD grid, then clip to the fire perimeter."""
+    """Reproject to EPSG:5070 snapped to the NLCD grid, then clip to the fire perimeter.
+
+    Returns None when the geometry is too small / thin to cover any snapped
+    30 m pixels (common for split-polygon slivers).
+    """
     ox, oy = NLCD_ORIGIN
     minx, miny, maxx, maxy = geometry.bounds
     left = ox + math.floor((minx - ox) / RES) * RES
@@ -528,6 +533,12 @@ def to_5070_clip(ds, geometry):
     bottom = oy - math.ceil((oy - miny) / RES) * RES
     tr = Affine(RES, 0, left, 0, -RES, top)
     w, h = int(round((right - left) / RES)), int(round((top - bottom) / RES))
+    if w <= 0 or h <= 0:
+        return None
     out = ds.rio.reproject("EPSG:5070", transform=tr, shape=(h, w),
                            resampling=Resampling.nearest, nodata=np.nan)
-    return out.rio.clip([geometry], crs="EPSG:5070", drop=True)
+    try:
+        return out.rio.clip([geometry], crs="EPSG:5070", drop=True)
+    except NoDataInBounds:
+        return None
+

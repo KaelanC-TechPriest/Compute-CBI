@@ -262,8 +262,10 @@ def main() -> int:
                         comp = xr.Dataset({"pre": pre_da, "post": post_da})
                         stack = build_stack(comp, def_path)
                         del comp, pre_da, post_da; gc.collect()
-                        ds  = predict(stack, bundle);       del stack; gc.collect()
-                        raw_pieces.append(to_5070_clip(ds, piece_geom))
+                        ds = predict(stack, bundle);       del stack; gc.collect()
+                        ds = to_5070_clip(ds, piece_geom)
+                        if ds is not None:
+                            raw_pieces.append(ds)
                         del ds; gc.collect()
                     except Exception as e:
                         print(f"  [{tid}] piece failed {piece_geom.bounds}: {type(e).__name__}: {e}",
