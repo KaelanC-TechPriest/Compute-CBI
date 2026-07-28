@@ -45,7 +45,7 @@ from aws_utils import _aws_creds_available, _S3_AUTH_HINT, lazy_fetch_and_compos
 _M2_PER_ACRE: float = 4_046.8564224
 _SPLIT_THRESHOLD_M2: float = 150_000 * _M2_PER_ACRE # based on 8GB RAM capacity
 
-def _split_polygon(geom: BaseGeometry, threshold_m2:float) -> list[BaseGeometry]:
+def split_polygon(geom: BaseGeometry, threshold_m2:float) -> list[BaseGeometry]:
     minx, miny, maxx, maxy = geom.bounds
     bbox_area = (maxx - minx) * (maxy - miny)
     if bbox_area <= threshold_m2: return [geom]
@@ -70,7 +70,7 @@ def _split_polygon(geom: BaseGeometry, threshold_m2:float) -> list[BaseGeometry]
             sub_geoms = [piece]
 
         for sub_geom in sub_geoms:
-            pieces.extend(_split_polygon(sub_geom, threshold_m2))
+            pieces.extend(split_polygon(sub_geom, threshold_m2))
     return pieces
 
 def main() -> int:
@@ -232,7 +232,7 @@ def main() -> int:
                 print(f"[{tid}:{i}/{total}] {fire_id} state={fire['state']} year={fire['year']} "
                           f"DOY=[{fire['start_day']},{fire['end_day']}]", flush=True)
 
-                pieces = _split_polygon(fire["geometry"], worker_split_threshold)
+                pieces = split_polygon(fire["geometry"], worker_split_threshold)
                 if args.debug and len(pieces) > 1:
                     n_acres = fire["area_m2"] / _M2_PER_ACRE
                     print(f"debug [_worker]: {fire_id}: {n_acres:.0f} acres -> split into {len(pieces)} piece(s)", flush=True)
