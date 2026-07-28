@@ -245,13 +245,23 @@ def main() -> int:
                                                   minx - PADDING, miny - PADDING,
                                                   maxx + PADDING, maxy + PADDING)
                     try:
-                        comp = lazy_fetch_and_composite(
-                            piece_bbox, fire["year"],
-                            fire["start_day"], fire["end_day"],
-                            args.max_cloud,
-                            debug=args.debug,
-                        )
-                        stack = build_stack(comp, def_path);  del comp; gc.collect()
+                        pre_da  = lazy_fetch_and_composite(piece_bbox,
+                                                           fire["year"],
+                                                           "pre",
+                                                           fire["start_day"],
+                                                           fire["end_day"],
+                                                           args.max_cloud,
+                                                           debug=args.debug)
+                        post_da  = lazy_fetch_and_composite(piece_bbox,
+                                                            fire["year"],
+                                                            "post",
+                                                            fire["start_day"],
+                                                            fire["end_day"],
+                                                            args.max_cloud,
+                                                            debug=args.debug)
+                        comp = xr.Dataset({"pre": pre_da, "post": post_da})
+                        stack = build_stack(comp, def_path)
+                        del comp, pre_da, post_da; gc.collect()
                         ds  = predict(stack, bundle);       del stack; gc.collect()
                         raw_pieces.append(to_5070_clip(ds, piece_geom))
                         del ds; gc.collect()

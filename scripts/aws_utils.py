@@ -169,16 +169,29 @@ def fetch_landsat(bbox, year, start_day, end_day, max_cloud):
     return cube
 
 
-def lazy_fetch_and_composite(bbox, year, start_day, end_day, max_cloud, debug: bool = False):
-    """Fetch Landsat scenes and build pre/post composites, downloading Y±2 only if needed.
+def lazy_fetch_and_composite(
+    bbox,
+    year: int,
+    slot,
+    start_day,
+    end_day,
+    max_cloud,
+    debug: bool = False,
+) -> xr.DataArray:
+    """Fetch Landsat for one composite slot, downloading fallback year only if needed.
 
-    Processes pre and post phases independently so only one half of the raw data
-    is live at a time, roughly halving peak memory. Each phase fetches the
-    preferred year first (Y-1 for pre, Y+1 for post) and downloads the fallback
-    (Y-2 / Y+2) when preferred has no scenes or when NaN pixels remain.
+    Call once for pre (preferred=Y-1, fallback=Y-2) and once for post
+    (preferred=Y+1, fallback=Y+2). Returns the composite DataArray for that slot.
     """
+
+    preferred_y = year - 1
+    fallback_y = year - 2
+
+    if slot == "post":
+        preferred_y = year + 1
+        fallback_y = year + 2
+
     grid = fire_grid(bbox)
-    grid_str: str | None = None  # filled on first cube
 
     def _fetch_year(y: int) -> list[xr.DataArray]:
         if debug: print(f"debug [_fetch_year]: fetching landsat for year {y}", flush=True)
@@ -209,56 +222,46 @@ def lazy_fetch_and_composite(bbox, year, start_day, end_day, max_cloud, debug: b
         c.rio.write_crs(f"EPSG:{grid[0]}", inplace=True)
         return c
 
-    def _phase(preferred_y: int, fallback_y: int, slot: str) -> xr.DataArray:
-        """Fetch one composite slot ("pre" or "post"), return its DataArray."""
-        nonlocal grid_str
-        arrs: dict[int, list[xr.DataArray]] = {}
-        yr_arrs = _fetch_year(preferred_y)
-        if yr_arrs:
-            arrs[preferred_y] = yr_arrs
-        else:
-            if debug:
-                print(f"debug [_phase]: preferred Y{preferred_y} empty, "
-                      f"trying fallback Y{fallback_y}", flush=True)
-            fb_arrs = _fetch_year(fallback_y)
-            if fb_arrs:
-                arrs[fallback_y] = fb_arrs
-
-        cube = _make_cube(arrs)
-        if cube is None:
-            raise RuntimeError(
-                f"no overlapping Landsat scenes found for "
-                f"Y{preferred_y - year:+d} or Y{fallback_y - year:+d}")
-
-        if grid_str is None:
-            grid_str = f"{cube.sizes['y']}x{cube.sizes['x']} EPSG:{grid[0]}"
-
-        comp = composite(cube, year, debug=debug)
-        del cube
-        gc.collect()
-
-        if bool(np.any(np.isnan(comp[slot].values))) and fallback_y not in arrs:
-            if debug:
-                print(f"debug [_phase]: landsat Y {preferred_y} has NaNs, "
-                      f"falling back to Y{fallback_y}", flush=True)
-            fb_arrs = _fetch_year(fallback_y)
-            if fb_arrs:
-                arrs[fallback_y] = fb_arrs
-                cube = _make_cube(arrs)
-                assert cube is not None
-                comp = composite(cube, year, debug=debug)
-                del cube
-                gc.collect()
-
-        result = comp[slot]
-        total = sum(len(al) for al in arrs.values())
+    arrs: dict[int, list[xr.DataArray]] = {}
+    yr_arrs = _fetch_year(preferred_y)
+    if yr_arrs:
+        arrs[preferred_y] = yr_arrs
+    else:
         if debug:
-            print(f"debug [_phase]: landsat {slot}: {total} scene(s)", flush=True)
-        return result
+            print(f"debug [lazy_fetch_and_composite]: preferred Y{preferred_y} empty, "
+                  f"trying fallback Y{fallback_y}", flush=True)
+        fb_arrs = _fetch_year(fallback_y)
+        if fb_arrs:
+            arrs[fallback_y] = fb_arrs
 
-    pre_da  = _phase(year - 1, year - 2, "pre")
-    post_da = _phase(year + 1, year + 2, "post")
+    cube = _make_cube(arrs)
+    if cube is None:
+        raise RuntimeError(
+            f"no overlapping Landsat scenes found for "
+            f"Y{preferred_y - year:+d} or Y{fallback_y - year:+d}")
 
     if debug:
-        print(f"debug [lazy_fetch_and_composite]: landsat: grid {grid_str}", flush=True)
-    return xr.Dataset({"pre": pre_da, "post": post_da})
+        print(f"debug [lazy_fetch_and_composite]: landsat {slot}: "
+              f"grid {cube.sizes['y']}x{cube.sizes['x']} EPSG:{grid[0]}", flush=True)
+
+    comp = composite(cube, year, debug=debug)
+
+    if bool(np.any(np.isnan(comp[slot].values))) and fallback_y not in arrs:
+        if debug:
+            print(f"debug [lazy_fetch_and_composite]: landsat Y{preferred_y} has NaNs, "
+                  f"falling back to Y{fallback_y}", flush=True)
+        fb_arrs = _fetch_year(fallback_y)
+        if fb_arrs:
+            arrs[fallback_y] = fb_arrs
+            cube = _make_cube(arrs)
+            assert cube is not None
+            comp = composite(cube, year, debug=debug)
+
+    result = comp[slot]
+    del cube, comp
+    gc.collect()
+
+    if debug:
+        total = sum(len(al) for al in arrs.values())
+        print(f"debug [lazy_fetch_and_composite]: landsat {slot}: {total} scene(s)", flush=True)
+    return result
