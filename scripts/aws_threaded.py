@@ -73,34 +73,6 @@ def _split_polygon(geom: BaseGeometry, threshold_m2:float) -> list[BaseGeometry]
             pieces.extend(_split_polygon(sub_geom, threshold_m2))
     return pieces
 
-def _process_piece(
-    piece_geom: BaseGeometry,
-    fire: dict,
-    def_path: Path,
-    bundle: dict,
-    max_cloud: float,
-    debug: bool = False,
-) -> xr.Dataset | None:
-    minx, miny, maxx, maxy = piece_geom.bounds
-    tid = threading.current_thread().name
-    piece_bbox = transform_bounds("EPSG:5070", "EPSG:4326",
-                                  minx - PADDING, miny - PADDING,
-                                  maxx + PADDING, maxy + PADDING)
-    try:
-        comp = lazy_fetch_and_composite(
-            piece_bbox, fire["year"],
-            fire["start_day"], fire["end_day"],
-            max_cloud,
-            debug=debug,
-        )
-        stack = build_stack(comp, def_path);  del comp; gc.collect()
-        ds    = predict(stack, bundle);       del stack; gc.collect()
-        return to_5070_clip(ds, piece_geom)
-    except Exception as e:
-        print(f"  [{tid}] piece failed {piece_geom.bounds}: {type(e).__name__}: {e}", 
-              flush=True)
-        return None
-
 def main() -> int:
     p = argparse.ArgumentParser(
         description="Multithreaded CBI for all MTBS perimeters in a state (or one), via AWS."
@@ -268,7 +240,25 @@ def main() -> int:
                 raw_pieces = []
                 for pi, piece_geom in enumerate(pieces, start=1):
                     if args.debug: print(f"debug [_worker]: processing piece {pi}")
-                    raw_pieces.append(_process_piece(piece_geom, fire, def_path, bundle, args.max_cloud, debug=args.debug))
+                    minx, miny, maxx, maxy = piece_geom.bounds
+                    piece_bbox = transform_bounds("EPSG:5070", "EPSG:4326",
+                                                  minx - PADDING, miny - PADDING,
+                                                  maxx + PADDING, maxy + PADDING)
+                    try:
+                        comp = lazy_fetch_and_composite(
+                            piece_bbox, fire["year"],
+                            fire["start_day"], fire["end_day"],
+                            args.max_cloud,
+                            debug=args.debug,
+                        )
+                        stack = build_stack(comp, def_path);  del comp; gc.collect()
+                        ds  = predict(stack, bundle);       del stack; gc.collect()
+                        raw_pieces.append(to_5070_clip(ds, piece_geom))
+                        del ds; gc.collect()
+                    except Exception as e:
+                        print(f"  [{tid}] piece failed {piece_geom.bounds}: {type(e).__name__}: {e}",
+                              flush=True)
+                        raw_pieces.append(None)
 
                 piece_datasets = [p for p in raw_pieces if p is not None]
                 del raw_pieces; gc.collect()
