@@ -26,19 +26,19 @@ from utils import (
 # ---------------------------------------------------------------------------- constants
 STAC_URL = "https://earth-search.aws.element84.com/v1"
 _GDAL_ENV = {
-    "GDAL_CACHEMAX": 1024 * 1024 * 1024,  # 1 GB in bytes; rasterio calls GDALSetCacheMax64() directly so bytes are required.
-    "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
-    # Earth Search hrefs are uppercase `..._SR_B4.TIF`; the allow-list match is
-    # case-sensitive, so `.TIF` must be present or GDAL refuses to open them.
-    "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.TIF",
-    "GDAL_HTTP_MULTIRANGE": "YES",
-    "GDAL_HTTP_MERGE_CONSECUTIVE_RANGES": "YES",
-    "GDAL_HTTP_MAX_RETRY": "3",
-    "GDAL_HTTP_RETRY_DELAY": "1",
-    # The `usgs-landsat` COG bucket is requester-pays in us-west-2; GDAL's native
-    # S3 driver resolves AWS credentials from the env / ~/.aws (no boto3 needed).
-    "AWS_REQUEST_PAYER": "requester",
     "AWS_REGION": "us-west-2",
+    "AWS_REQUEST_PAYER": "requester", # The `usgs-landsat` COG bucket is requester-pays in us-west-2; GDAL's native S3 driver resolves AWS credentials from the env / ~/.aws (no boto3 needed).
+    "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.TIF,.tiff", # Earth Search hrefs are uppercase `..._SR_B4.TIF`; the allow-list match is case-sensitive, so `.TIF` must be present or GDAL refuses to open them.
+    "CPL_VSIL_CURL_CACHE_SIZE": "200000000",        # ~200 MB VSI curl cache
+    "CPL_VSIL_CURL_USE_HEAD": "NO",                 # sometimes helps with S3
+    "GDAL_CACHEMAX": 1024 * 1024 * 1024,  # 1 GB in bytes; rasterio calls GDALSetCacheMax64() directly so bytes are required.
+    "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",   # faster open on S3
+    "GDAL_HTTP_MAX_CACHED_CONNECTIONS": "100",     # keep-alive cache (GDAL ≥ 3.11)
+    "GDAL_HTTP_MAX_RETRY": "3",
+    "GDAL_HTTP_MAX_TOTAL_CONNECTIONS": "200",      # total simultaneous connections
+    "GDAL_HTTP_MERGE_CONSECUTIVE_RANGES": "YES",
+    "GDAL_HTTP_MULTIRANGE": "YES",                 # or "SERIAL" / "SINGLE_GET"
+    "GDAL_HTTP_RETRY_DELAY": "1",
 }
 _S3_AUTH_HINT = (
     "Earth Search streams Landsat from the requester-pays `usgs-landsat` bucket "
