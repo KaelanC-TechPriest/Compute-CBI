@@ -4,6 +4,7 @@ from __future__ import annotations
 import gc
 import math
 import os
+import time
 
 import numpy as np
 import pystac
@@ -90,8 +91,13 @@ def _search(bbox, start, end, max_cloud, start_day, end_day):
     return items
 
 
-def _item_window(item: pystac.Item, grid: tuple[int, Affine, int, int]) -> xr.DataArray | None:
+def _item_window(
+    item: pystac.Item,
+    grid: tuple[int, Affine, int, int],
+    debug: bool = False,
+) -> xr.DataArray | None:
     """Read the fire-bbox window of an item, scale + QA-mask, reproject to grid."""
+    t0 = time.perf_counter() if debug else 0.0
     g_epsg, g_tr, g_w, g_h = grid
     epsg = int(item.properties["proj:code"].split(":")[1])
     tr = item.properties["proj:transform"]
@@ -115,12 +121,14 @@ def _item_window(item: pystac.Item, grid: tuple[int, Affine, int, int]) -> xr.Da
     wtr = A * Affine.translation(c0, r0)
 
     arr = {}
+    t_s3 = time.perf_counter() if debug else 0.0
     with rasterio.Env(**_GDAL_ENV):
         for band in BANDS:
             # Earth Search hrefs are `s3://usgs-landsat/...`; read via GDAL /vsis3/.
             path = item.assets[band].href.replace("s3://", "/vsis3/")
             with rasterio.open(path) as ds:
                 arr[band] = ds.read(1, window=win)
+    t_s3_done = time.perf_counter() if debug else 0.0
 
     h, w = arr[QA].shape
     xs = wtr.c + (np.arange(w) + 0.5) * wtr.a
@@ -135,8 +143,17 @@ def _item_window(item: pystac.Item, grid: tuple[int, Affine, int, int]) -> xr.Da
     da = xr.DataArray(opt, dims=("band", "y", "x"),
                       coords={"band": OPTICAL, "y": ys, "x": xs})
     da = da.rio.write_crs(epsg).rio.write_nodata(np.nan)
+    t_repro = time.perf_counter() if debug else 0.0
     out = da.rio.reproject(f"EPSG:{g_epsg}", transform=g_tr, shape=(g_h, g_w),
                            resampling=Resampling.bilinear, nodata=np.nan)
+    if debug:
+        print(
+            f"debug [_item_window]: s3_read={t_s3_done - t_s3:.2f}s "
+            f"reproject={time.perf_counter() - t_repro:.2f}s "
+            f"total={time.perf_counter() - t0:.2f}s "
+            f"win={int(win.width)}x{int(win.height)} id={item.id}",
+            flush=True,
+        )
     return out.drop_vars("spatial_ref", errors="ignore")
 
 
@@ -178,12 +195,15 @@ def lazy_fetch_and_composite(
     max_cloud,
     debug: bool = False,
 ) -> xr.DataArray:
-    """Fetch Landsat for one composite slot, downloading fallback year only if needed.
+    """Fetch Landsat for one composite slot, downloading fallback year only if
+    needed.
 
     Call once for pre (preferred=Y-1, fallback=Y-2) and once for post
-    (preferred=Y+1, fallback=Y+2). Returns the composite DataArray for that slot.
+    (preferred=Y+1, fallback=Y+2). Returns the composite DataArray for that
+    slot.
     """
 
+    t_all = time.perf_counter() if debug else 0.0
     preferred_y = year - 1
     fallback_y = year - 2
 
@@ -194,14 +214,19 @@ def lazy_fetch_and_composite(
     grid = fire_grid(bbox)
 
     def _fetch_year(y: int) -> list[xr.DataArray]:
+        t_year = time.perf_counter() if debug else 0.0
         if debug: print(f"debug [_fetch_year]: fetching landsat for year {y}", flush=True)
+        t_search = time.perf_counter() if debug else 0.0
         items = _search(bbox, f"{y}-01-01", f"{y + 1}-01-01",
                         max_cloud, start_day, end_day)
-        if debug: print(f"debug [_fetch_year]: got {len(items)} items from year {y}", flush=True)
+        if debug:
+            print(f"debug [_fetch_year]: stac_search={time.perf_counter() - t_search:.2f}s "
+                  f"got {len(items)} items from year {y}", flush=True)
         arrs: list[xr.DataArray] = []
+        t_read = time.perf_counter() if debug else 0.0
         try:
             for it in items:
-                a = _item_window(it, grid)
+                a = _item_window(it, grid, debug=debug)
                 if a is not None:
                     arrs.append(a.assign_coords(time=it.datetime).expand_dims("time"))
         except RasterioIOError as e:
@@ -209,7 +234,10 @@ def lazy_fetch_and_composite(
                 raise SystemExit(f"error: cannot read Landsat from S3. {_S3_AUTH_HINT}\n"
                                  f"  (underlying error: {e})")
             raise
-        if debug: print(f"debug [_fetch_year]: {len(arrs)}/{len(items)} scenes overlap grid for year {y}", flush=True)
+        if debug:
+            print(f"debug [_fetch_year]: scene_reads={time.perf_counter() - t_read:.2f}s "
+                  f"{len(arrs)}/{len(items)} scenes overlap grid for year {y} "
+                  f"(year_total={time.perf_counter() - t_year:.2f}s)", flush=True)
         return arrs
 
     def _make_cube(arrs_by_year: dict[int, list[xr.DataArray]]) -> xr.DataArray | None:
@@ -244,7 +272,11 @@ def lazy_fetch_and_composite(
         print(f"debug [lazy_fetch_and_composite]: landsat {slot}: "
               f"grid {cube.sizes['y']}x{cube.sizes['x']} EPSG:{grid[0]}", flush=True)
 
+    t_comp = time.perf_counter() if debug else 0.0
     comp = composite(cube, year, debug=debug)
+    if debug:
+        print(f"debug [lazy_fetch_and_composite]: composite={time.perf_counter() - t_comp:.2f}s "
+              f"slot={slot}", flush=True)
 
     if bool(np.any(np.isnan(comp[slot].values))) and fallback_y not in arrs:
         if debug:
@@ -255,7 +287,11 @@ def lazy_fetch_and_composite(
             arrs[fallback_y] = fb_arrs
             cube = _make_cube(arrs)
             assert cube is not None
+            t_comp = time.perf_counter() if debug else 0.0
             comp = composite(cube, year, debug=debug)
+            if debug:
+                print(f"debug [lazy_fetch_and_composite]: composite_fallback="
+                      f"{time.perf_counter() - t_comp:.2f}s slot={slot}", flush=True)
 
     result = comp[slot]
     del cube, comp
@@ -263,5 +299,6 @@ def lazy_fetch_and_composite(
 
     if debug:
         total = sum(len(al) for al in arrs.values())
-        print(f"debug [lazy_fetch_and_composite]: landsat {slot}: {total} scene(s)", flush=True)
+        print(f"debug [lazy_fetch_and_composite]: landsat {slot}: {total} scene(s) "
+              f"total={time.perf_counter() - t_all:.2f}s", flush=True)
     return result

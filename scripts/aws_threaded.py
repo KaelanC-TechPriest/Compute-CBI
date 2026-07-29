@@ -237,14 +237,17 @@ def main() -> int:
                     n_acres = fire["area_m2"] / _M2_PER_ACRE
                     print(f"debug [_worker]: {fire_id}: {n_acres:.0f} acres -> split into {len(pieces)} piece(s)", flush=True)
 
+                t_fire = time.perf_counter() if args.debug else 0.0
                 raw_pieces = []
                 for pi, piece_geom in enumerate(pieces, start=1):
-                    if args.debug: print(f"debug [_worker]: processing piece {pi}")
+                    t_piece = time.perf_counter() if args.debug else 0.0
+                    if args.debug: print(f"debug [_worker]: processing piece {pi}/{len(pieces)}", flush=True)
                     minx, miny, maxx, maxy = piece_geom.bounds
                     piece_bbox = transform_bounds("EPSG:5070", "EPSG:4326",
                                                   minx - PADDING, miny - PADDING,
                                                   maxx + PADDING, maxy + PADDING)
                     try:
+                        t0 = time.perf_counter() if args.debug else 0.0
                         pre_da  = lazy_fetch_and_composite(piece_bbox,
                                                            fire["year"],
                                                            "pre",
@@ -252,6 +255,11 @@ def main() -> int:
                                                            fire["end_day"],
                                                            args.max_cloud,
                                                            debug=args.debug)
+                        if args.debug:
+                            print(f"debug [_worker]: piece {pi} lazy_fetch pre="
+                                  f"{time.perf_counter() - t0:.2f}s", flush=True)
+
+                        t0 = time.perf_counter() if args.debug else 0.0
                         post_da  = lazy_fetch_and_composite(piece_bbox,
                                                             fire["year"],
                                                             "post",
@@ -259,14 +267,35 @@ def main() -> int:
                                                             fire["end_day"],
                                                             args.max_cloud,
                                                             debug=args.debug)
+                        if args.debug:
+                            print(f"debug [_worker]: piece {pi} lazy_fetch post="
+                                  f"{time.perf_counter() - t0:.2f}s", flush=True)
+
                         comp = xr.Dataset({"pre": pre_da, "post": post_da})
+                        t0 = time.perf_counter() if args.debug else 0.0
                         stack = build_stack(comp, def_path)
+                        if args.debug:
+                            print(f"debug [_worker]: piece {pi} build_stack="
+                                  f"{time.perf_counter() - t0:.2f}s", flush=True)
                         del comp, pre_da, post_da; gc.collect()
+
+                        t0 = time.perf_counter() if args.debug else 0.0
                         ds = predict(stack, bundle);       del stack; gc.collect()
+                        if args.debug:
+                            print(f"debug [_worker]: piece {pi} predict="
+                                  f"{time.perf_counter() - t0:.2f}s", flush=True)
+
+                        t0 = time.perf_counter() if args.debug else 0.0
                         ds = to_5070_clip(ds, piece_geom)
+                        if args.debug:
+                            print(f"debug [_worker]: piece {pi} to_5070_clip="
+                                  f"{time.perf_counter() - t0:.2f}s", flush=True)
                         if ds is not None:
                             raw_pieces.append(ds)
                         del ds; gc.collect()
+                        if args.debug:
+                            print(f"debug [_worker]: piece {pi} total="
+                                  f"{time.perf_counter() - t_piece:.2f}s", flush=True)
                     except Exception as e:
                         print(f"  [{tid}] piece failed {piece_geom.bounds}: {type(e).__name__}: {e}",
                               flush=True)
@@ -282,6 +311,7 @@ def main() -> int:
                     ds = piece_datasets.pop()
                     del piece_datasets
                 else:
+                    t0 = time.perf_counter() if args.debug else 0.0
                     cbi_merged    = merge_arrays([p["CBI"]    for p in piece_datasets], nodata=np.nan)
                     cbi_bc_merged = merge_arrays([p["CBI_bc"] for p in piece_datasets], nodata=np.nan)
                     ds = xr.Dataset({"CBI": cbi_merged, "CBI_bc": cbi_bc_merged})
@@ -289,16 +319,24 @@ def main() -> int:
                     ds["CBI"].rio.write_nodata(np.nan, inplace=True)
                     ds["CBI_bc"].rio.write_nodata(np.nan, inplace=True)
                     del piece_datasets, cbi_merged, cbi_bc_merged; gc.collect()
+                    if args.debug:
+                        print(f"debug [_worker]: merge_pieces="
+                              f"{time.perf_counter() - t0:.2f}s", flush=True)
 
                 out_cbi.parent.mkdir(parents=True, exist_ok=True)
                 out_cbi_bc.parent.mkdir(parents=True, exist_ok=True)
+                t0 = time.perf_counter() if args.debug else 0.0
                 ds["CBI"].rio.to_raster(out_cbi, tiled=True, compress="ZSTD", zstd_level=1)
                 ds["CBI_bc"].rio.to_raster(out_cbi_bc, tiled=True, compress="ZSTD", zstd_level=1)
+                if args.debug:
+                    print(f"debug [_worker]: write_rasters="
+                          f"{time.perf_counter() - t0:.2f}s", flush=True)
                 cbi = ds["CBI"].values
                 del ds; gc.collect()
                 print(f"[{tid}] Done {fire_id}: grid={cbi.shape[0]}x{cbi.shape[1]} "
                       f"valid={int(np.isfinite(cbi).sum())} "
-                      f"CBI med={np.nanmedian(cbi):.2f} max={np.nanmax(cbi):.2f}",
+                      f"CBI med={np.nanmedian(cbi):.2f} max={np.nanmax(cbi):.2f}"
+                      + (f" fire_total={time.perf_counter() - t_fire:.2f}s" if args.debug else ""),
                       flush=True)
                 del cbi; gc.collect()
                 with counts_lock:
