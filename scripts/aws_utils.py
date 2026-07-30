@@ -33,7 +33,7 @@ _GDAL_ENV = {
     "CPL_VSIL_CURL_CACHE_SIZE": "200000000",        # ~200 MB VSI curl cache
     "CPL_VSIL_CURL_CHUNK_SIZE": "524288",      # 512 KB (default is much smaller)
     "CPL_VSIL_CURL_USE_HEAD": "NO",                 # sometimes helps with S3
-    "GDAL_CACHEMAX": 1073741824,  # 1 GB in bytes; rasterio calls GDALSetCacheMax64() directly so bytes are required.
+    # "GDAL_CACHEMAX": 1073741824,  # 1 GB in bytes; rasterio calls GDALSetCacheMax64() directly so bytes are required.
     "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",   # faster open on S3
     "GDAL_HTTP_MAX_CACHED_CONNECTIONS": "100",     # keep-alive cache (GDAL ≥ 3.11)
     "GDAL_HTTP_MAX_RETRY": "3",
