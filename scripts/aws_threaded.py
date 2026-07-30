@@ -43,7 +43,7 @@ from utils import (
 from aws_utils import _aws_creds_available, _S3_AUTH_HINT, lazy_fetch_and_composite
 
 _M2_PER_ACRE: float = 4_046.8564224
-_SPLIT_THRESHOLD_M2: float = 150_000 * _M2_PER_ACRE # based on 8GB RAM capacity
+_SPLIT_THRESHOLD_M2: float = 300_000 * _M2_PER_ACRE # based on 8GB RAM capacity
 
 def split_polygon(geom: BaseGeometry, threshold_m2:float) -> list[BaseGeometry]:
     minx, miny, maxx, maxy = geom.bounds
