@@ -140,7 +140,7 @@ def _item_window(
             for band in BANDS
         }
 
-        with ThreadPoolExecutor(max_workers=len(BANDS)) as ex:
+        with ThreadPoolExecutor(max_workers=4) as ex:
             futures = {
                 ex.submit(_read_band, band, path, win): band
                 for band, path in paths.items()
@@ -241,21 +241,40 @@ def lazy_fetch_and_composite(
         t_search = time.perf_counter() if debug else 0.0
         items = _search(bbox, f"{y}-01-01", f"{y + 1}-01-01",
                         max_cloud, start_day, end_day)
+
+        if len(items) == 0:
+            return []
+
         if debug:
             print(f"debug [_fetch_year]: stac_search={time.perf_counter() - t_search:.2f}s "
                   f"got {len(items)} items from year {y}", flush=True)
         arrs: list[xr.DataArray] = []
+
+
+        def _fetch_item(it):
+            a = _item_window(it, grid, debug=debug)
+            if a is None:
+                return None
+            return a.assign_coords(time=it.datetime).expand_dims("time")
+
         t_read = time.perf_counter() if debug else 0.0
-        try:
-            for it in items:
-                a = _item_window(it, grid, debug=debug)
-                if a is not None:
-                    arrs.append(a.assign_coords(time=it.datetime).expand_dims("time"))
-        except RasterioIOError as e:
-            if _is_s3_auth_error(e):
-                raise SystemExit(f"error: cannot read Landsat from S3. {_S3_AUTH_HINT}\n"
-                                 f"  (underlying error: {e})")
-            raise
+
+        with ThreadPoolExecutor(max_workers=min(4, len(items))) as ex:
+            futures = [ex.submit(_fetch_item, item)
+                for item in items]
+
+            for fut in as_completed(futures):
+                try:
+                    data = fut.result()
+                except RasterioIOError as e:
+                    if _is_s3_auth_error(e):
+                        raise SystemExit(f"error: cannot read Landsat from S3. {_S3_AUTH_HINT}\n"
+                                         f"  (underlying error: {e})")
+                    raise
+
+                if data is not None:
+                    arrs.append(data)
+
         if debug:
             print(f"debug [_fetch_year]: scene_reads={time.perf_counter() - t_read:.2f}s "
                   f"{len(arrs)}/{len(items)} scenes overlap grid for year {y} "
