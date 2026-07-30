@@ -30,8 +30,8 @@ _GDAL_ENV = {
     "AWS_REGION": "us-west-2",
     "AWS_REQUEST_PAYER": "requester", # The `usgs-landsat` COG bucket is requester-pays in us-west-2; GDAL's native S3 driver resolves AWS credentials from the env / ~/.aws (no boto3 needed).
     "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.TIF,.tiff", # Earth Search hrefs are uppercase `..._SR_B4.TIF`; the allow-list match is case-sensitive, so `.TIF` must be present or GDAL refuses to open them.
-    "CPL_VSIL_CURL_CACHE_SIZE": "400000000",        # ~200 MB VSI curl cache
-    "CPL_VSIL_CURL_CHUNK_SIZE": "1048576",      # 1 MB (default is much smaller)
+    "CPL_VSIL_CURL_CACHE_SIZE": "800000000",        # ~200 MB VSI curl cache
+    "CPL_VSIL_CURL_CHUNK_SIZE": "2097152",      # 2 MB (default is much smaller)
     "CPL_VSIL_CURL_USE_HEAD": "NO",                 # sometimes helps with S3
     # "GDAL_CACHEMAX": 1073741824,  # 1 GB in bytes; rasterio calls GDALSetCacheMax64() directly so bytes are required.
     "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",   # faster open on S3
