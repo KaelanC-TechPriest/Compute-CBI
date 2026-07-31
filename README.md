@@ -10,17 +10,18 @@ Landsat spectral indices + climatic water deficit + latitude.
 ## What's included
 ```
 scripts/
-├── cbi_oneshot.py - The original oneshot file provided by Fred.
-├── cbi_oneshot_aws.py - The oneshot script modified for use on AWS EC2.
-├── cbi_yearly.py - Uses the perimeter method for each state in a given year.
-├── cbi_statewide.py - Preemptively caches the entire state.
-├── cbi_statewide_threaded.py - Same functionality with multithreading.
-├── cbi_perimeter.py - Caches each fire as it appears in the list.
-├── cbi_perimeter_threaded.py - Same functionality with multithreading.
-├── cbi_perimeter_aws.py - Single-threaded, no caching, AWS-compatible.
-├── cbi_aws_threaded.py - Multithreaded, no caching, AWS-compatible.
+├── cbi_oneshot.py - The original oneshot file provided by Fred Bunt.
+├── aws_oneshot.py - The oneshot script modified for use on AWS EC2, also by Fred.
+├── aws_threaded.py - Multithreaded, AWS-compatible.
+├── cbi_perimeter_threaded.py - Multithreaded, Planetary Computer.
 ├── aws_utils.py - A collection of functions for running on AWS.
-└── utils.py - A collection of commonly used functions.
+├── utils.py - A collection of commonly used functions.
+└── legacy/
+    ├── cbi_yearly.py - Uses the perimeter method for each state in a given year.
+    ├── cbi_statewide.py - Preemptively caches the entire state.
+    ├── cbi_statewide_threaded.py - Same functionality with multithreading.
+    ├── cbi_perimeter.py - Caches each fire as it appears in the list.
+    └── cbi_perimeter_aws.py - Single-threaded, no caching, AWS-compatible.
 ```
 
 - `pyproject.toml` + `uv.lock` — the [uv] project definition (deps + pinned lock).
@@ -53,12 +54,14 @@ uv reads `pyproject.toml`/`uv.lock`, creates a local `.venv`, installs the pinne
 > Caching was abandoned in later script versions due to extremely low cache hit
 > rate.
 
-> [!WARNING] **Needs internet** 
+> [!WARNING]
+> **Needs internet**
 > Some scripts stream Landsat from the Microsoft Planetary Computer (free, no
 > account). Each new scene is downloaded once and cached locally; later runs
 > skip the download for scenes already in the cache.
 
-> [!WARNING] **AWS needs credentials**
+> [!WARNING]
+> **AWS needs credentials**
 > AWS script versions require AWS credentials because they download from a
 > landsat S3 bucket. You can set credentials with `aws configure`, creating
 > access keys, or creating/assigning a IAM role.
@@ -93,28 +96,24 @@ is the expected signal for a real forested wildfire.
   low/unreliable CBI — the model was built on forested CBI plots.
 - Selecting a perimeter by `--index`/`--event-id` runs it regardless of fire type;
   the default-first-wildfire behavior only applies when neither is given.
-- Cache hit rate is extremely low.
 
-# Testing
+## Optimizations and Discoveries
 
-## Testing in the year 2019. (data/fire_perims/test.gpkg)
+### Why doesn't it cache landsat data?
+
+Caching showed minimal improvements due to extremely low hit-rate. Examine the
+following table to see that a full cache is significantly faster than a
+cacheless run. However, an empty cache shows little (or no) improvements.
 
 | Year | Normal | Caching (empty) | Caching (full) |
 | ---- | ----- | --------------- | --------------- |
 | 2006 | ~89.82 min | ~89.82 min |  |
 | 2019 | ~18.07 min | ~17.95 min | ~0.19 min |
 
-
-## Testing with Multithreading
-
-
-| Year | Multithreading |
-| ------ | ---- |
-| 2006 | ~45.07 min |
-| 2019 | ~11.04 min |
-
-
-## Fire-bounds vs State-bounds
+After testing the program's cache-hit rate, we observed that it was
+consistantly near 0%. We tried downloading the entire state for each year to
+ensure a 100% hit-rate, but the download time far outweighed the savings from
+cache hits. See the following table, for example.
 
 | METHOD | RUNTIME NJ |
 | ----- | -- |
@@ -124,17 +123,17 @@ is the expected signal for a real forested wildfire.
 - Both runs were incomplete due to issues with landsat data.
 - The state-bounds run started with the first few years cached.
 
-# Memory optimization
+This method was also limited by needing to make multiple requests to download
+statewide landsat data. Unfortunately, no endpoint for downloading data at this
+large scale exists in the planetary computer.
 
-We have issues where some fires are too large for the AWS EC2 instances that we
-use. To fix this, out multithreaded AWS script orders the fires from smallest
-to largest. After performing a single run, we discovered the maximum size of
-fires that four workers can simultaneously compute. Those fire ids can be
-cross-referenced in the geopackage to get their sizes as shown below.
+Caching was abandoned in later versions of the script (after commit d727762).
 
-## Fires that killed my boy
+### Why split on fire polygon bounds?
 
-`sqlite3 /home/kix/work/johnson-lab/Compute-CBI/data/fire_perims/mtbs/mtbs_perims_trimmed.gpkg "SELECT Event_ID, Incid_Name, area_m2, area_acres FROM mtbs_perims_trimmed WHERE Event_ID IN ('MT4643911179319880809','MT4878711426219880906','MT4697011032419901123','MT4803310853419901111');"`
+First, we found that the script was crashing due to lack of memory. At the time of one crash, the script had four workers running on the fires shown in the table. Querying the burned area of each fire (using the shown sql query) gives the area burned.
+
+`sqlite3 .../data/fire_perims/mtbs/mtbs_perims_trimmed.gpkg "SELECT Event_ID, Incid_Name, area_m2, area_acres FROM mtbs_perims_trimmed WHERE Event_ID IN ('MT4643911179319880809','MT4878711426219880906','MT4697011032419901123','MT4803310853419901111');"`
 
 |       Event_ID        |      area_m2         |     area_acres     |
 | --------------------- | ------------------   | -------------------|
@@ -144,62 +143,18 @@ cross-referenced in the geopackage to get their sizes as shown below.
 | MT4697011032419901123 |  103849068.49944615  |  25661.665611183042 |
 
 In total, the script was running on a total of 4.817161e8 square meters or
-119034.65608 acres when it crashed.
+119034.65608 acres when it crashed. This is problematic because Montana's
+largest fire is over a million acres of burned area, which we do not have
+enough memory for.
 
-> [!WARNING] This will not be enough
-> The largest fires are around a million acres. Even Montana's largest fire is
-> over a million.
-
-## Top 10 largest fires in CA
-
-|       Event ID        |       Fire Name       | Size (acres) |
-| --------------------- | --------------------- | ------------ |
-| CA3966012280920200817 | AUGUST COMPLEX        | 1,068,793    |
-| CA3987612137920210714 | DIXIE                 | 979,807      |
-| CA3924012311020180727 | RANCH                 | 427,048      |
-| CA3742412156820200816 | SCU LIGHTNING COMPLEX | 405,796      |
-| CA3720111927220200905 | CREEK                 | 381,450      |
-| CA4009112093120200817 | NORTH COMPLEX         | 316,545      |
-| CA3850412233720200817 | HENNESSEY             | 314,230      |
-| CA4062112015220120812 | RUSH                  | 306,811      |
-| CA3442911910020171205 | THOMAS                | 281,983      |
-| CA3293911676620031025 | CEDAR                 | 268,362      |
-
-## Top 10 largest fires in montana
-
-|       Event ID        |        Fire Name        | Size (acres) |
-| --------------------- | ----------------------- | ------------ |
-| MT4566910646920120625 | ASH CREEK               | 253,414      |
-| MT4721710790020170719 | BRIDGE COULEE           | 222,572      |
-| MT4559210981020060822 | DERBY                   | 200,993      |
-| MT4726811348520170724 | RICE RIDGE              | 171,473      |
-| MT4580910676420210808 | RICHARD SPRING          | 168,764      |
-| MT4724011275119880625 | CANYON CREEK            | 167,875      |
-| MT4625810827219840825 | HAWK CREEK              | 157,778      |
-| MT4838610920219911016 | BLAINE C                | 138,192      |
-| MT4751410764220030719 | MISSOURI BREAKS COMPLEX | 137,947      |
-| MT4573810684020120801 | CHALKY                  | 132,681      |
+The script was then made more efficient by checking if the area burned was
+greater than 25k acres (roughly the area a single worker can compute at once),
+and if it was, the fire was split in half recursively by the bound's longest
+axis until the burned area was less than 25k acres. The script was later
+updated to check if the area within the bounds of the fire was greater than the
+threshold. This decision was made in the light of fire complexes (collections
+of fires entered as one fire), which have a much larger bounded area, but
+relatively small burned area. This change was the key to accurately controlling
+the script's memory usage.
 
 # Roadmap
-
-## Global
-- [-] Check if we can send a single request to get the whole state or even
-    multiple years. (no endpoint exists)
-- [ ] Compute CBI for *only* wildfires
-- [x] We can check before downloading the second previous or next year
-
-## statewide
-
-- [x] Optional start/end date params
-
-## statewide_threaded
-
-- [x] Optional start/end date params
-
-## perimeter
-
-- [x] Optional start/end date params
-
-## perimeter_threaded
-
-- [ ] Optional start/end date params
