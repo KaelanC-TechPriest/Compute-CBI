@@ -29,7 +29,8 @@ scripts/
   trained from this on first run and cached to `data/model/cbi_rf.joblib`).
 - `data/terraclimate/def_19812010_annual.tif` — the static climatic-water-deficit
   input (so it isn't re-downloaded).
-- `data/fire_perims/` — Should have fire perimeters. Too large to put on github.
+- `data/fire_perims/` — Fire perimeters saved as GeoPackage (.gpkg) files. Too
+large to put on github.
 
 ## Setup & run (uses [uv])
 
@@ -47,24 +48,17 @@ uv reads `pyproject.toml`/`uv.lock`, creates a local `.venv`, installs the pinne
 
 - `--index N` selects the 0-based perimeter in the gpkg; or `--event-id <ID>`;
   default is the first wildfire.
-- Some scripts can cache. Scenes are cached on first download and reused
-  on subsequent runs for the same or overlapping fire footprints.
-
-> [!NOTE]
-> Caching was abandoned in later script versions due to extremely low cache hit
-> rate.
 
 > [!WARNING]
 > **Needs internet**
-> Some scripts stream Landsat from the Microsoft Planetary Computer (free, no
-> account). Each new scene is downloaded once and cached locally; later runs
-> skip the download for scenes already in the cache.
+> The scripts that use Planetary Computer need internet access to be able to
+> reach the landsat data source.
 
 > [!WARNING]
-> **AWS needs credentials**
-> AWS script versions require AWS credentials because they download from a
-> landsat S3 bucket. You can set credentials with `aws configure`, creating
-> access keys, or creating/assigning a IAM role.
+> **AWS scripts need credentials**
+> The scripts that run on AWS require AWS credentials to download landsat data
+> from an S3 bucket. You can set credentials with `aws configure`, creating
+> access keys, or assigning a IAM role to your EC2 instance.
 
 ### Example
 
@@ -96,6 +90,9 @@ is the expected signal for a real forested wildfire.
   low/unreliable CBI — the model was built on forested CBI plots.
 - Selecting a perimeter by `--index`/`--event-id` runs it regardless of fire type;
   the default-first-wildfire behavior only applies when neither is given.
+- The `aws_threaded.py` script spawns `workers × 4 × 4` threads total.
+    - 4 threads per fire or fire piece
+    - 4 threads per piece (for parallelized band downloads)
 
 ## Optimizations and Discoveries
 
@@ -111,9 +108,10 @@ cacheless run. However, an empty cache shows little (or no) improvements.
 | 2019 | ~18.07 min | ~17.95 min | ~0.19 min |
 
 After testing the program's cache-hit rate, we observed that it was
-consistantly near 0%. We tried downloading the entire state for each year to
-ensure a 100% hit-rate, but the download time far outweighed the savings from
-cache hits. See the following table, for example.
+consistantly near 0%. We tried preemptively downloading the entire state for
+each year to ensure a 100% hit-rate, but the download time far outweighed the
+savings from cache hits. See the following table to see the time it took to
+compute every fire in New Jersey (from 1986 to 2020).
 
 | METHOD | RUNTIME NJ |
 | ----- | -- |
@@ -123,15 +121,15 @@ cache hits. See the following table, for example.
 - Both runs were incomplete due to issues with landsat data.
 - The state-bounds run started with the first few years cached.
 
-This method was also limited by needing to make multiple requests to download
-statewide landsat data. Unfortunately, no endpoint for downloading data at this
-large scale exists in the planetary computer.
-
-Caching was abandoned in later versions of the script (after commit d727762).
+Caching was abandoned in later versions of the scripts (after commit d727762).
+Currently, only scripts in `scripts/legacy` have caching.
 
 ### Why split on fire polygon bounds?
 
-First, we found that the script was crashing due to lack of memory. At the time of one crash, the script had four workers running on the fires shown in the table. Querying the burned area of each fire (using the shown sql query) gives the area burned.
+First, we found that the script was crashing due to lack of memory. At the time
+of one crash, the script had four workers running on the fires shown in the
+table. Querying the burned area of each fire (using the shown sql query) gives
+the area burned.
 
 `sqlite3 .../data/fire_perims/mtbs/mtbs_perims_trimmed.gpkg "SELECT Event_ID, Incid_Name, area_m2, area_acres FROM mtbs_perims_trimmed WHERE Event_ID IN ('MT4643911179319880809','MT4878711426219880906','MT4697011032419901123','MT4803310853419901111');"`
 
@@ -142,19 +140,19 @@ First, we found that the script was crashing due to lack of memory. At the time 
 | MT4803310853419901111 |   95757366.107284427 |  23662.16225488696 |
 | MT4697011032419901123 |  103849068.49944615  |  25661.665611183042 |
 
-In total, the script was running on a total of 4.817161e8 square meters or
-119034.65608 acres when it crashed. This is problematic because Montana's
-largest fire is over a million acres of burned area, which we do not have
-enough memory for.
+In total, the script was running on 4.817161e8 square meters or 119034.65608
+acres when it crashed. This is problematic because Montana's largest fire is
+over a million acres of burned area, which we do not have enough memory for.
 
 The script was then made more efficient by checking if the area burned was
-greater than 25k acres (roughly the area a single worker can compute at once),
-and if it was, the fire was split in half recursively by the bound's longest
-axis until the burned area was less than 25k acres. The script was later
-updated to check if the area within the bounds of the fire was greater than the
-threshold. This decision was made in the light of fire complexes (collections
-of fires entered as one fire), which have a much larger bounded area, but
-relatively small burned area. This change was the key to accurately controlling
-the script's memory usage.
+greater than a threshold defined by 100 thousand acres (roughly the total seen
+above) divided by the number of workers. If the area burned was greater, the
+fire was split in half recursively by the bound's longest axis until the burned
+area was less than 25k acres per piece. The script was later updated to check
+if the area within the *bounds* of the fire was greater than the threshold. This
+decision was made in the light of fire complexes (collections of fires entered
+as one fire), which have a much larger bounded area, but relatively small
+burned area. This change was the key to accurately controlling the script's
+memory usage.
 
 # Roadmap
