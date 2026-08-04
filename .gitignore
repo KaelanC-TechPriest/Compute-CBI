@@ -3,3 +3,4 @@ out/
 data/landsat_cache/
 data/fire_perims/
 .claude/
+.venv/
