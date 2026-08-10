@@ -18,7 +18,7 @@ Run (single year):
 Run (a range, still one file per year):
     uv run python scripts/mtbs_cbi_histogram.py --years 2018,2019,2020,2021
 
-Run (everything available, still safe to re-run):
+Run (everything available -- processes years one at a time, still safe to re-run):
     uv run python scripts/mtbs_cbi_histogram.py
 """
 
@@ -28,7 +28,6 @@ import argparse
 import csv
 import os
 import sys
-from concurrent.futures import ProcessPoolExecutor, as_completed
 from pathlib import Path
 
 import numpy as np
@@ -67,11 +66,6 @@ def main() -> int:
     p.add_argument("--bins", type=int, default=60, help="Number of CBI histogram bins.")
     p.add_argument("--cbi-min", type=float, default=0.0, help="Lower edge of the CBI axis.")
     p.add_argument("--cbi-max", type=float, default=3.0, help="Upper edge of the CBI axis.")
-    p.add_argument("--workers", type=int, default=1,
-                   help="Parallel year workers. Keep modest -- a full-aggregate run at "
-                        "--workers 4 previously crashed with BrokenProcessPool, almost "
-                        "certainly OOM: each worker can transiently hold 100GB+ for a "
-                        "large-fire-year CBI mosaic. Raise only while watching `free -h`.")
     p.add_argument("--out-dir", type=Path, default=Path("out/histograms"),
                    help="Directory to write one <year>.csv per computed year into.")
     args = p.parse_args()
@@ -87,17 +81,13 @@ def main() -> int:
     bin_edges = np.linspace(args.cbi_min, args.cbi_max, args.bins + 1)
 
     n_written = 0
-    with ProcessPoolExecutor(max_workers=args.workers) as ex:
-        futures = {ex.submit(process_year, y, args.mtbs_dir, args.cbi_dir, bin_edges): y
-                  for y in years}
-        for fut in as_completed(futures):
-            year = futures[fut]
-            H = fut.result()
-            if H is None:
-                continue
-            path = _write_year_csv(year, H, bin_edges, args.out_dir)
-            print(f"  wrote {path}", flush=True)
-            n_written += 1
+    for year in years:
+        H = process_year(year, args.mtbs_dir, args.cbi_dir, bin_edges)
+        if H is None:
+            continue
+        path = _write_year_csv(year, H, bin_edges, args.out_dir)
+        print(f"  wrote {path}", flush=True)
+        n_written += 1
 
     print(f"Done: {n_written}/{len(years)} year(s) written to {args.out_dir}", flush=True)
     return 0
