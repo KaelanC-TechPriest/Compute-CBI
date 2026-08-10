@@ -41,19 +41,6 @@ from mtbs_cbi_common import (
 )
 
 
-def _write_year_csv(year: int, H: np.ndarray, bin_edges: np.ndarray, out_dir: Path) -> Path:
-    final_path = out_dir / f"{year}.csv"
-    tmp_path = out_dir / f".{year}.csv.tmp"
-    with open(tmp_path, "w", newline="") as f:
-        w = csv.writer(f)
-        w.writerow(["year", "cbi_bin_left", "cbi_bin_right", "mtbs_class", "count"])
-        for i, (left, right) in enumerate(zip(bin_edges[:-1], bin_edges[1:])):
-            for j, c in enumerate(MTBS_CLASSES):
-                w.writerow([year, left, right, c, int(H[i, j])])
-    os.replace(tmp_path, final_path)
-    return final_path
-
-
 def main() -> int:
     p = argparse.ArgumentParser(
         description="Compute per-year MTBS-vs-CBI joint histograms as one CSV per year.")
@@ -82,11 +69,26 @@ def main() -> int:
 
     n_written = 0
     for year in years:
+        final_path = args.out_dir / f"{year}.csv"
+        tmp_path = args.out_dir / f".{year}.csv.tmp"
+
+        if final_path.exists():
+            print(f"{year}: skipping, already exists")
+            continue
+
         H = process_year(year, args.mtbs_dir, args.cbi_dir, bin_edges)
         if H is None:
             continue
-        path = _write_year_csv(year, H, bin_edges, args.out_dir)
-        print(f"  wrote {path}", flush=True)
+
+        with open(tmp_path, "w", newline="") as f:
+            w = csv.writer(f)
+            w.writerow(["year", "cbi_bin_left", "cbi_bin_right", "mtbs_class", "count"])
+            for i, (left, right) in enumerate(zip(bin_edges[:-1], bin_edges[1:])):
+                for j, c in enumerate(MTBS_CLASSES):
+                    w.writerow([year, left, right, c, int(H[i, j])])
+        os.replace(tmp_path, final_path)
+
+        print(f"  wrote {final_path}", flush=True)
         n_written += 1
 
     print(f"Done: {n_written}/{len(years)} year(s) written to {args.out_dir}", flush=True)
