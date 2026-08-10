@@ -21,6 +21,7 @@ dependencies = [
     "requests",
     "h5netcdf",
     "h5py",
+    "matplotlib>=3.11.1",
 ]
 
 [tool.pycodestyle]
