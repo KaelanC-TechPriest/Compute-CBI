@@ -1,10 +1,17 @@
-"""Compute per-year MTBS-vs-CBI joint histograms and write one CSV per year.
+"""Compute per-year MTBS-vs-CBI-vs-NLCD joint histograms, one CSV per year.
 
-For every requested year with both an MTBS COG (`<mtbs-dir>/<year>.tif`) and a
-bias-corrected CBI mosaic (`<cbi-dir>/<year>_bc.tif`), this warps MTBS onto the
-CBI grid (nearest-neighbor, since MTBS classes are categorical -- see
+For every requested year with an MTBS COG (`<mtbs-dir>/<year>.tif`), a
+bias-corrected CBI mosaic (`<cbi-dir>/<year>_bc.tif`), and an NLCD annual
+land-cover layer for the year *before* the fire
+(`<nlcd-dir>/Annual_NLCD_LndCov_<year - 1>_CU_C1V2.tif`), this warps MTBS and
+NLCD onto the CBI grid (nearest-neighbor, since both are categorical -- see
 mtbs_cbi_common.py for why a real CRS-aware warp is required) and writes the
-joint histogram of (CBI value, MTBS class) to `<out-dir>/<year>.csv`.
+joint histogram of (CBI value, MTBS class, NLCD land-cover category) to
+`<out-dir>/<year>.csv`. NLCD is read from year - 1, not the fire's own year,
+so it reflects the vegetation that actually burned rather than any
+fire-caused reclassification; the 16 raw NLCD classes are collapsed into 8
+general categories (Water, Developed, Barren, Forest, Shrubland, Grassland,
+Agriculture, Wetland).
 
 Designed to run incrementally: each year only ever writes its own file, so
 recomputing a year overwrites just that file and leaves every other year's
@@ -35,6 +42,8 @@ import numpy as np
 from mtbs_cbi_common import (
     DEFAULT_CBI_DIR,
     DEFAULT_MTBS_DIR,
+    DEFAULT_NLCD_DIR,
+    LAND_COVER_CATEGORIES,
     MTBS_CLASSES,
     discover_years,
     process_year,
@@ -43,18 +52,25 @@ from mtbs_cbi_common import (
 
 def main() -> int:
     p = argparse.ArgumentParser(
-        description="Compute per-year MTBS-vs-CBI joint histograms as one CSV per year.")
+        description="Compute per-year MTBS-vs-CBI-vs-NLCD joint histograms as one CSV per year.")
     p.add_argument("--mtbs-dir", type=Path, default=DEFAULT_MTBS_DIR,
                    help="Directory of normalized MTBS COGs, <year>.tif.")
     p.add_argument("--cbi-dir", type=Path, default=DEFAULT_CBI_DIR,
                    help="Directory of CBI mosaics, <year>_bc.tif (bias-corrected only).")
+    p.add_argument("--nlcd-dir", type=Path, default=DEFAULT_NLCD_DIR,
+                   help="Directory of NLCD annual land-cover COGs, "
+                        "Annual_NLCD_LndCov_<year>_CU_C1V2.tif.")
     p.add_argument("--years", default=None,
                    help="Comma list of years to (re)compute (default: all years present in both dirs).")
     p.add_argument("--bins", type=int, default=60, help="Number of CBI histogram bins.")
     p.add_argument("--cbi-min", type=float, default=0.0, help="Lower edge of the CBI axis.")
     p.add_argument("--cbi-max", type=float, default=3.0, help="Upper edge of the CBI axis.")
-    p.add_argument("--out-dir", type=Path, default=Path("out/histograms"),
-                   help="Directory to write one <year>.csv per computed year into.")
+    p.add_argument("--out-dir", type=Path, default=Path("out/histograms_nlcd"),
+                   help="Directory to write one <year>.csv per computed year into. "
+                        "Defaults to a separate tree from out/histograms/ since this "
+                        "adds a new required column (land_cover) -- mixing old and new "
+                        "schema files in one directory would break anything that "
+                        "assumes consistent columns across files.")
     args = p.parse_args()
 
     years = (sorted(int(y) for y in args.years.split(","))
@@ -76,16 +92,17 @@ def main() -> int:
             print(f"{year}: skipping, already exists")
             continue
 
-        H = process_year(year, args.mtbs_dir, args.cbi_dir, bin_edges)
+        H = process_year(year, args.mtbs_dir, args.cbi_dir, args.nlcd_dir, bin_edges)
         if H is None:
             continue
 
         with open(tmp_path, "w", newline="") as f:
             w = csv.writer(f)
-            w.writerow(["year", "cbi_bin_left", "cbi_bin_right", "mtbs_class", "count"])
+            w.writerow(["year", "cbi_bin_left", "cbi_bin_right", "mtbs_class", "land_cover", "count"])
             for i, (left, right) in enumerate(zip(bin_edges[:-1], bin_edges[1:])):
                 for j, c in enumerate(MTBS_CLASSES):
-                    w.writerow([year, left, right, c, int(H[i, j])])
+                    for k, lc in enumerate(LAND_COVER_CATEGORIES):
+                        w.writerow([year, left, right, c, lc, int(H[i, j, k])])
         os.replace(tmp_path, final_path)
 
         print(f"  wrote {final_path}", flush=True)
