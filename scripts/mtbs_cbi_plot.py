@@ -21,33 +21,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from mtbs_cbi_common import MTBS_CLASSES, MTBS_LABELS, plot_pdf
-
-
-def _load(hist_dir: Path, years: list[int] | None) -> pd.DataFrame:
-    paths = sorted(hist_dir.glob("*.csv"))
-    if years is not None:
-        wanted = set(years)
-        paths = [p for p in paths if p.stem.isdigit() and int(p.stem) in wanted]
-    if not paths:
-        raise SystemExit(f"No histogram files found in {hist_dir} "
-                         f"(years filter: {years or 'all'}). Run mtbs_cbi_histogram.py first.")
-    return pd.concat((pd.read_csv(p) for p in paths), ignore_index=True)
-
-
-def _check_consistent_bins(df: pd.DataFrame) -> None:
-    per_year_edges = df.groupby("year").apply(
-        lambda g: tuple(sorted(map(tuple, g[["cbi_bin_left", "cbi_bin_right"]].values.tolist()))),
-        include_groups=False,
-    )
-    edge_sets = per_year_edges.unique()
-    if len(edge_sets) > 1:
-        reference = edge_sets[0]
-        mismatched = per_year_edges[per_year_edges != reference].index.tolist()
-        raise SystemExit(
-            f"Bin edges differ across years -- likely recomputed with different "
-            f"--bins/--cbi-min/--cbi-max. Mismatched year(s): {mismatched}. "
-            f"Recompute all years with the same bin settings before plotting.")
+from mtbs_cbi_common import MTBS_CLASSES, MTBS_COLORS, MTBS_LABELS
 
 
 def main() -> int:
@@ -63,11 +37,29 @@ def main() -> int:
     args = p.parse_args()
 
     years = [int(y) for y in args.years.split(",")] if args.years else None
-    df = _load(args.hist_dir, years)
+    paths = sorted(args.hist_dir.glob("*.csv"))
+    if years is not None:
+        wanted = set(years)
+        paths = [p for p in paths if p.stem.isdigit() and int(p.stem) in wanted]
+    if not paths:
+        raise SystemExit(f"No histogram files found in {args.hist_dir} "
+                         f"(years filter: {years or 'all'}). Run mtbs_cbi_histogram.py first.")
+    df = pd.concat((pd.read_csv(p) for p in paths), ignore_index=True)
     loaded_years = sorted(df["year"].unique().tolist())
     print(f"Loaded {len(loaded_years)} year(s): {loaded_years}", flush=True)
 
-    _check_consistent_bins(df)
+    per_year_edges = df.groupby("year").apply(
+        lambda g: tuple(sorted(map(tuple, g[["cbi_bin_left", "cbi_bin_right"]].values.tolist()))),
+        include_groups=False,
+    )
+    edge_sets = per_year_edges.unique()
+    if len(edge_sets) > 1:
+        reference = edge_sets[0]
+        mismatched = per_year_edges[per_year_edges != reference].index.tolist()
+        raise SystemExit(
+            f"Bin edges differ across years -- likely recomputed with different "
+            f"--bins/--cbi-min/--cbi-max. Mismatched year(s): {mismatched}. "
+            f"Recompute all years with the same bin settings before plotting.")
 
     agg = (df.groupby(["cbi_bin_left", "cbi_bin_right", "mtbs_class"])["count"]
             .sum().reset_index().sort_values(["cbi_bin_left", "mtbs_class"]))
@@ -96,7 +88,37 @@ def main() -> int:
         print(f"Wrote {args.out_csv}", flush=True)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    plot_pdf(bin_centers, pdf, args.out)
+    import matplotlib
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+
+    fig, ax = plt.subplots(figsize=(9, 6), facecolor="#fcfcfb")
+    ax.set_facecolor("#fcfcfb")
+
+    for j, c in enumerate((1,2,3,4)):
+        if np.isnan(pdf[:, j]).all():
+            continue
+        ax.plot(bin_centers, pdf[:, j], color=MTBS_COLORS[c], linewidth=2,
+               label=f"{c} – {MTBS_LABELS[c]}")
+
+    ax.set_xlabel("CBI value", color="#0b0b0b")
+    ax.set_ylabel("Density", color="#0b0b0b")
+    ax.set_title("CBI distribution by MTBS burn-severity class", color="#0b0b0b")
+    ax.tick_params(colors="#52514e")
+    for spine in ("top", "right"):
+        ax.spines[spine].set_visible(False)
+    for spine in ("left", "bottom"):
+        ax.spines[spine].set_color("#c3c2b7")
+    ax.grid(True, color="#e1e0d9", linewidth=0.8)
+    ax.set_axisbelow(True)
+    legend = ax.legend(title="MTBS class", frameon=False)
+    legend.get_title().set_color("#0b0b0b")
+    for text in legend.get_texts():
+        text.set_color("#0b0b0b")
+
+    fig.tight_layout()
+    fig.savefig(args.out, dpi=150)
+    plt.close(fig)
     print(f"Wrote {args.out}", flush=True)
     return 0
 

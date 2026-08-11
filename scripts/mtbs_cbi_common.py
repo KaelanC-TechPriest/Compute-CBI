@@ -132,37 +132,3 @@ def process_year(year: int, mtbs_dir: Path, cbi_dir: Path,
     print(f"  {year}: {len(fire_paths)} fires, {n_valid_total:,} valid pixels "
           f"({time.perf_counter() - t0:.0f}s)", flush=True)
     return H
-
-
-def plot_pdf(bin_centers: np.ndarray, pdf: np.ndarray, out_path: Path) -> None:
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
-
-    fig, ax = plt.subplots(figsize=(9, 6), facecolor="#fcfcfb")
-    ax.set_facecolor("#fcfcfb")
-
-    for j, c in enumerate(MTBS_CLASSES):
-        if np.isnan(pdf[:, j]).all():
-            continue
-        ax.plot(bin_centers, pdf[:, j], color=MTBS_COLORS[c], linewidth=2,
-               label=f"{c} – {MTBS_LABELS[c]}")
-
-    ax.set_xlabel("CBI value", color="#0b0b0b")
-    ax.set_ylabel("Density", color="#0b0b0b")
-    ax.set_title("CBI distribution by MTBS burn-severity class", color="#0b0b0b")
-    ax.tick_params(colors="#52514e")
-    for spine in ("top", "right"):
-        ax.spines[spine].set_visible(False)
-    for spine in ("left", "bottom"):
-        ax.spines[spine].set_color("#c3c2b7")
-    ax.grid(True, color="#e1e0d9", linewidth=0.8)
-    ax.set_axisbelow(True)
-    legend = ax.legend(title="MTBS class", frameon=False)
-    legend.get_title().set_color("#0b0b0b")
-    for text in legend.get_texts():
-        text.set_color("#0b0b0b")
-
-    fig.tight_layout()
-    fig.savefig(out_path, dpi=150)
-    plt.close(fig)
