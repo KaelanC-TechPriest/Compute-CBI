@@ -88,6 +88,9 @@ is the expected signal for a real forested wildfire.
 
 - **Forest-trained model.** Non-forest fires (e.g. sagebrush, grassland) produce
   low/unreliable CBI — the model was built on forested CBI plots.
+- Lacks a non-processing-area-mask, so bodies of water will be given a CBI number.
+- In a small number of cases, the ±2 year buffer is not enough. Like the fire `TX3417209989919910222`, which has 89% of its area as missing data.
+    - As of 08/04/2026, we intend to continue with Parks' method, leaving these fires as they are.
 - Selecting a perimeter by `--index`/`--event-id` runs it regardless of fire type;
   the default-first-wildfire behavior only applies when neither is given.
 - The `aws_threaded.py` script spawns `workers × 4 × 4` threads total.
