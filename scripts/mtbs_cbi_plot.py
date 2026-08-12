@@ -21,7 +21,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from mtbs_cbi_common import MTBS_CLASSES, MTBS_COLORS, MTBS_LABELS
+from mtbs_cbi_common import LAND_COVER_CATEGORIES, MTBS_CLASSES, MTBS_COLORS, MTBS_LABELS
 
 
 def main() -> int:
@@ -31,6 +31,11 @@ def main() -> int:
                    help="Directory of <year>.csv files written by mtbs_cbi_histogram.py.")
     p.add_argument("--years", default=None,
                    help="Comma list of years to include (default: every file present).")
+    p.add_argument("--land-cover", choices=LAND_COVER_CATEGORIES, default=None,
+                   help="Optional: restrict to one NLCD land-cover category (e.g. Forest). "
+                        "Requires --hist-dir files with a land_cover column, i.e. output "
+                        "from a histogram run that included --nlcd-dir. Default: no filter, "
+                        "pixels are summed across all land-cover categories.")
     p.add_argument("--out", type=Path, default=Path("out/mtbs_cbi_pdf.png"), help="Output PNG path.")
     p.add_argument("--out-csv", type=Path, default=None,
                    help="Optional path to dump the aggregated (bin, class) counts/densities as CSV.")
@@ -47,6 +52,18 @@ def main() -> int:
     df = pd.concat((pd.read_csv(p) for p in paths), ignore_index=True)
     loaded_years = sorted(df["year"].unique().tolist())
     print(f"Loaded {len(loaded_years)} year(s): {loaded_years}", flush=True)
+
+    if args.land_cover is not None:
+        if "land_cover" not in df.columns:
+            raise SystemExit(
+                f"--land-cover was given but {args.hist_dir} has no land_cover column -- "
+                "recompute with mtbs_cbi_histogram.py's --nlcd-dir (e.g. out/histograms_nlcd/) "
+                "and point --hist-dir there.")
+        df = df[df["land_cover"] == args.land_cover]
+        if df.empty:
+            raise SystemExit(f"No rows left after filtering to land_cover={args.land_cover!r} "
+                             f"in the selected years.")
+        print(f"Filtered to land_cover={args.land_cover!r}", flush=True)
 
     per_year_edges = df.groupby("year").apply(
         lambda g: tuple(sorted(map(tuple, g[["cbi_bin_left", "cbi_bin_right"]].values.tolist()))),
@@ -103,7 +120,10 @@ def main() -> int:
 
     ax.set_xlabel("CBI value", color="#0b0b0b")
     ax.set_ylabel("Density", color="#0b0b0b")
-    ax.set_title("CBI distribution by MTBS burn-severity class", color="#0b0b0b")
+    title = "CBI distribution by MTBS burn-severity class"
+    if args.land_cover is not None:
+        title += f" ({args.land_cover} only)"
+    ax.set_title(title, color="#0b0b0b")
     ax.tick_params(colors="#52514e")
     for spine in ("top", "right"):
         ax.spines[spine].set_visible(False)
