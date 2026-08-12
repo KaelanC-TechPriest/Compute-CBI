@@ -35,11 +35,13 @@ def main() -> int:
                    help="Directory of <year>.csv files written by aggregate_pixel_categories.py.")
     p.add_argument("--years", default=None,
                    help="Comma list of years to include (default: every file present).")
-    p.add_argument("--land-cover", choices=LAND_COVER_CATEGORIES, default=None,
-                   help="Optional: restrict to one NLCD land-cover category (e.g. Forest). "
-                        "Requires --hist-dir files with a land_cover column, i.e. output "
-                        "from a histogram run that included --nlcd-dir. Default: no filter, "
-                        "pixels are summed across all land-cover categories.")
+    lc_choices = list(LAND_COVER_CATEGORIES) + [f"!{c}" for c in LAND_COVER_CATEGORIES]
+    p.add_argument("--land-cover", choices=lc_choices, default=None, metavar="FILTER",
+                   help="Optional NLCD land-cover filter. Pass a category to keep only that "
+                        "class (e.g. Forest), or prefix with ! to exclude one class "
+                        "(e.g. !Developed). Requires --hist-dir files with a land_cover "
+                        "column. Default: no filter; pixels are summed across all categories. "
+                        f"Choices: {', '.join(LAND_COVER_CATEGORIES)} (or !Category).")
     p.add_argument("--out", type=Path, default=Path("out/mtbs_cbi_pdf.png"), help="Output PNG path.")
     p.add_argument("--out-csv", type=Path, default=None,
                    help="Optional path to dump the aggregated (bin, class) counts/densities as CSV.")
@@ -57,17 +59,26 @@ def main() -> int:
     loaded_years = sorted(df["year"].unique().tolist())
     print(f"Loaded {len(loaded_years)} year(s): {loaded_years}", flush=True)
 
+    land_cover_title = None
     if args.land_cover is not None:
         if "land_cover" not in df.columns:
             raise SystemExit(
                 f"--land-cover was given but {args.hist_dir} has no land_cover column -- "
                 "recompute with aggregate_pixel_categories.py's --nlcd-dir (e.g. out/histograms_nlcd/) "
                 "and point --hist-dir there.")
-        df = df[df["land_cover"] == args.land_cover]
+        exclude = args.land_cover.startswith("!")
+        category = args.land_cover[1:] if exclude else args.land_cover
+        if exclude:
+            df = df[df["land_cover"] != category]
+            land_cover_title = f"excluding {category}"
+            print(f"Excluded land_cover={category!r}", flush=True)
+        else:
+            df = df[df["land_cover"] == category]
+            land_cover_title = f"{category} only"
+            print(f"Filtered to land_cover={category!r}", flush=True)
         if df.empty:
-            raise SystemExit(f"No rows left after filtering to land_cover={args.land_cover!r} "
+            raise SystemExit(f"No rows left after land-cover filter {args.land_cover!r} "
                              f"in the selected years.")
-        print(f"Filtered to land_cover={args.land_cover!r}", flush=True)
 
     per_year_edges = df.groupby("year").apply(
         lambda g: tuple(sorted(map(tuple, g[["cbi_bin_left", "cbi_bin_right"]].values.tolist()))),
@@ -82,7 +93,7 @@ def main() -> int:
             f"--bins/--cbi-min/--cbi-max. Mismatched year(s): {mismatched}. "
             f"Recompute all years with the same bin settings before plotting.")
 
-    bin_width = 0.15
+    bin_width = 0.10
     agg = df.copy()
     agg["cbi_bin_left"] = np.floor(np.round(agg["cbi_bin_left"] / bin_width, 10)) * bin_width
     agg["cbi_bin_right"] = agg["cbi_bin_left"] + bin_width
@@ -125,8 +136,8 @@ def main() -> int:
     ax.set_xlabel("CBI value", color="#0b0b0b")
     ax.set_ylabel("Probability Density", color="#0b0b0b")
     title = "CBI distribution by MTBS burn-severity class"
-    if args.land_cover is not None:
-        title += f" ({args.land_cover} only)"
+    if land_cover_title is not None:
+        title += f" ({land_cover_title})"
     ax.set_title(title, color="#0b0b0b")
     ax.tick_params(colors="#52514e")
     for spine in ("top", "right"):
