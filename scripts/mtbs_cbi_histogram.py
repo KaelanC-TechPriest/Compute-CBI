@@ -1,8 +1,9 @@
 """Compute per-year MTBS-vs-CBI-vs-NLCD joint histograms, one CSV per year.
 
-For every requested year with an MTBS COG (`<mtbs-dir>/<year>.tif`), a
-bias-corrected CBI mosaic (`<cbi-dir>/<year>_bc.tif`), and an NLCD annual
-land-cover layer for the year *before* the fire
+For every requested year with an MTBS COG (`<mtbs-dir>/<year>.tif`), per-fire
+CBI tiles (`<cbi-dir>/<year>/<Event_ID>_CBI[_bc].tif` -- bias-corrected by
+default, or raw via --no-bias-corrected), and an NLCD annual land-cover layer
+for the year *before* the fire
 (`<nlcd-dir>/Annual_NLCD_LndCov_<year - 1>_CU_C1V2.tif`), this warps MTBS and
 NLCD onto the CBI grid (nearest-neighbor, since both are categorical -- see
 mtbs_cbi_common.py for why a real CRS-aware warp is required) and writes the
@@ -56,7 +57,14 @@ def main() -> int:
     p.add_argument("--mtbs-dir", type=Path, default=DEFAULT_MTBS_DIR,
                    help="Directory of normalized MTBS COGs, <year>.tif.")
     p.add_argument("--cbi-dir", type=Path, default=DEFAULT_CBI_DIR,
-                   help="Directory of CBI mosaics, <year>_bc.tif (bias-corrected only).")
+                   help="Directory of per-fire CBI tiles, <year>/<Event_ID>_CBI[_bc].tif.")
+    p.add_argument("--bias-corrected", action=argparse.BooleanOptionalAction, default=True,
+                   help="Use the bias-corrected CBI tiles (<Event_ID>_CBI_bc.tif). Pass "
+                        "--no-bias-corrected to use the raw tiles (<Event_ID>_CBI.tif) instead. "
+                        "Default: bias-corrected. Note the 'skip if already exists' behavior "
+                        "below is per-year-file, not per-variant -- switching this flag for a "
+                        "year already computed under the other variant will silently keep the "
+                        "old results unless you also change --out-dir or delete that year's file.")
     p.add_argument("--nlcd-dir", type=Path, default=DEFAULT_NLCD_DIR,
                    help="Directory of NLCD annual land-cover COGs, "
                         "Annual_NLCD_LndCov_<year>_CU_C1V2.tif.")
@@ -74,9 +82,10 @@ def main() -> int:
     args = p.parse_args()
 
     years = (sorted(int(y) for y in args.years.split(","))
-             if args.years else discover_years(args.mtbs_dir, args.cbi_dir))
+             if args.years else discover_years(args.mtbs_dir, args.cbi_dir, args.bias_corrected))
     if not years:
-        print("No years found with both an MTBS COG and a CBI _bc mosaic.", file=sys.stderr)
+        variant = "bias-corrected" if args.bias_corrected else "raw"
+        print(f"No years found with both an MTBS COG and {variant} CBI tiles.", file=sys.stderr)
         return 1
     print(f"Processing {len(years)} year(s): {years}", flush=True)
 
@@ -92,7 +101,8 @@ def main() -> int:
             print(f"{year}: skipping, already exists")
             continue
 
-        H = process_year(year, args.mtbs_dir, args.cbi_dir, args.nlcd_dir, bin_edges)
+        H = process_year(year, args.mtbs_dir, args.cbi_dir, args.nlcd_dir, bin_edges,
+                         bias_corrected=args.bias_corrected)
         if H is None:
             continue
 

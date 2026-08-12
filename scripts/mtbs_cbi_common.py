@@ -71,11 +71,16 @@ MTBS_COLORS = {
 }
 
 
-def discover_years(mtbs_dir: Path, cbi_dir: Path) -> list[int]:
+def _cbi_suffix(bias_corrected: bool) -> str:
+    return "_CBI_bc.tif" if bias_corrected else "_CBI.tif"
+
+
+def discover_years(mtbs_dir: Path, cbi_dir: Path, bias_corrected: bool = True) -> list[int]:
+    suffix = _cbi_suffix(bias_corrected)
     mtbs_years = {int(p.stem) for p in mtbs_dir.glob("*.tif") if p.stem.isdigit()}
     cbi_years = {
         int(p.name) for p in cbi_dir.iterdir()
-        if p.is_dir() and p.name.isdigit() and any(p.glob("*_CBI_bc.tif"))
+        if p.is_dir() and p.name.isdigit() and any(p.glob(f"*{suffix}"))
     }
     return sorted(mtbs_years & cbi_years)
 
@@ -108,7 +113,7 @@ def _read_aligned_window(ds: rasterio.DatasetReader, cbi: xr.DataArray,
 
 
 def process_year(year: int, mtbs_dir: Path, cbi_dir: Path, nlcd_dir: Path,
-                 bin_edges: np.ndarray) -> np.ndarray | None:
+                 bin_edges: np.ndarray, bias_corrected: bool = True) -> np.ndarray | None:
     """Return a (n_bins, 6, 8) joint histogram of (CBI value, MTBS class,
     NLCD land-cover category) for one year.
 
@@ -121,6 +126,10 @@ def process_year(year: int, mtbs_dir: Path, cbi_dir: Path, nlcd_dir: Path,
     reflects the vegetation that actually burned rather than any
     fire-caused reclassification in the fire's own year.
 
+    `bias_corrected` selects between the `_CBI_bc.tif` (bias-corrected) and
+    `_CBI.tif` (raw) per-fire CBI tiles -- see mtbs_cbi_histogram.py's
+    --bias-corrected/--no-bias-corrected flag.
+
     Returns None (rather than a zero array) when there's no source data at
     all, so callers can distinguish "not computed" from "computed and
     genuinely zero".
@@ -128,7 +137,7 @@ def process_year(year: int, mtbs_dir: Path, cbi_dir: Path, nlcd_dir: Path,
     mtbs_path = mtbs_dir / f"{year}.tif"
     nlcd_path = nlcd_dir / f"Annual_NLCD_LndCov_{year - 1}_CU_C1V2.tif"
     fire_dir = cbi_dir / str(year)
-    fire_paths = sorted(fire_dir.glob("*_CBI_bc.tif")) if fire_dir.is_dir() else []
+    fire_paths = sorted(fire_dir.glob(f"*{_cbi_suffix(bias_corrected)}")) if fire_dir.is_dir() else []
 
     if not mtbs_path.is_file() or not nlcd_path.is_file() or not fire_paths:
         missing = mtbs_path if not mtbs_path.is_file() \
