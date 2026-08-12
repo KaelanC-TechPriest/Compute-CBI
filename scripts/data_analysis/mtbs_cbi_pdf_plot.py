@@ -1,6 +1,6 @@
-"""Aggregate per-year MTBS-vs-CBI histograms (from agregate_pixel_categories.py) and plot.
+"""Aggregate per-year MTBS-vs-CBI histograms (from aggregate_pixel_categories.py) and plot.
 
-Loads every <hist-dir>/<year>.csv written by agregate_pixel_categories.py, sums raw
+Loads every <hist-dir>/<year>.csv written by aggregate_pixel_categories.py, sums raw
 pixel counts across the selected years (summing counts -- not densities -- is
 what makes cross-year aggregation correct), then plots P(CBI value | MTBS
 class) for classes 1-6.
@@ -21,14 +21,14 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from agregate_pixel_categories import LAND_COVER_CATEGORIES, MTBS_CLASSES, MTBS_COLORS, MTBS_LABELS
+from aggregate_pixel_categories import LAND_COVER_CATEGORIES, MTBS_CLASSES, MTBS_COLORS, MTBS_LABELS
 
 
 def main() -> int:
     p = argparse.ArgumentParser(
         description="Aggregate per-year MTBS-vs-CBI histograms and plot P(CBI | MTBS class).")
     p.add_argument("--hist-dir", type=Path, default=Path("out/histograms"),
-                   help="Directory of <year>.csv files written by agregate_pixel_categories.py.")
+                   help="Directory of <year>.csv files written by aggregate_pixel_categories.py.")
     p.add_argument("--years", default=None,
                    help="Comma list of years to include (default: every file present).")
     p.add_argument("--land-cover", choices=LAND_COVER_CATEGORIES, default=None,
@@ -48,7 +48,7 @@ def main() -> int:
         paths = [p for p in paths if p.stem.isdigit() and int(p.stem) in wanted]
     if not paths:
         raise SystemExit(f"No histogram files found in {args.hist_dir} "
-                         f"(years filter: {years or 'all'}). Run agregate_pixel_categories.py first.")
+                         f"(years filter: {years or 'all'}). Run aggregate_pixel_categories.py first.")
     df = pd.concat((pd.read_csv(p) for p in paths), ignore_index=True)
     loaded_years = sorted(df["year"].unique().tolist())
     print(f"Loaded {len(loaded_years)} year(s): {loaded_years}", flush=True)
@@ -57,7 +57,7 @@ def main() -> int:
         if "land_cover" not in df.columns:
             raise SystemExit(
                 f"--land-cover was given but {args.hist_dir} has no land_cover column -- "
-                "recompute with agregate_pixel_categories.py's --nlcd-dir (e.g. out/histograms_nlcd/) "
+                "recompute with aggregate_pixel_categories.py's --nlcd-dir (e.g. out/histograms_nlcd/) "
                 "and point --hist-dir there.")
         df = df[df["land_cover"] == args.land_cover]
         if df.empty:
