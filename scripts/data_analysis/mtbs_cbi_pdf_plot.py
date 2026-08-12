@@ -21,6 +21,10 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+
 from aggregate_pixel_categories import LAND_COVER_CATEGORIES, MTBS_CLASSES, MTBS_COLORS, MTBS_LABELS
 
 
@@ -78,11 +82,13 @@ def main() -> int:
             f"--bins/--cbi-min/--cbi-max. Mismatched year(s): {mismatched}. "
             f"Recompute all years with the same bin settings before plotting.")
 
-    agg = (df.groupby(["cbi_bin_left", "cbi_bin_right", "mtbs_class"])["count"]
+    bin_width = 0.15
+    agg = df.copy()
+    agg["cbi_bin_left"] = np.floor(np.round(agg["cbi_bin_left"] / bin_width, 10)) * bin_width
+    agg["cbi_bin_right"] = agg["cbi_bin_left"] + bin_width
+    agg = (agg.groupby(["cbi_bin_left", "cbi_bin_right", "mtbs_class"])["count"]
             .sum().reset_index().sort_values(["cbi_bin_left", "mtbs_class"]))
-    bin_centers = np.sort(agg["cbi_bin_left"].unique())
-    bin_width = agg["cbi_bin_right"].iloc[0] - agg["cbi_bin_left"].iloc[0]
-    bin_centers = (bin_centers + bin_width / 2)
+    bin_centers = np.sort(agg["cbi_bin_left"].unique()) + bin_width / 2
 
     wide_counts = agg.pivot(index="cbi_bin_left", columns="mtbs_class", values="count").reindex(
         columns=MTBS_CLASSES, fill_value=0)
@@ -105,21 +111,19 @@ def main() -> int:
         print(f"Wrote {args.out_csv}", flush=True)
 
     args.out.parent.mkdir(parents=True, exist_ok=True)
-    import matplotlib
-    matplotlib.use("Agg")
-    import matplotlib.pyplot as plt
 
     fig, ax = plt.subplots(figsize=(9, 6), facecolor="#fcfcfb")
     ax.set_facecolor("#fcfcfb")
 
-    for j, c in enumerate((1,2,3,4)):
+    for j, c in enumerate((1, 2, 3, 4)):
         if np.isnan(pdf[:, j]).all():
             continue
-        ax.plot(bin_centers, pdf[:, j], color=MTBS_COLORS[c], linewidth=2,
+        ax.bar(bin_centers, pdf[:, j], width=bin_width, align="center",
+               color=MTBS_COLORS[c], alpha=0.6, edgecolor="none",
                label=f"{c} – {MTBS_LABELS[c]}")
 
     ax.set_xlabel("CBI value", color="#0b0b0b")
-    ax.set_ylabel("Density", color="#0b0b0b")
+    ax.set_ylabel("Probability Density", color="#0b0b0b")
     title = "CBI distribution by MTBS burn-severity class"
     if args.land_cover is not None:
         title += f" ({args.land_cover} only)"
