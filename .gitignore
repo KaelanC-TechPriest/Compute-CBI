@@ -2,5 +2,6 @@ __pycache__/
 out/
 data/landsat_cache/
 data/fire_perims/
+data/cbi_field_plots/
 .claude/
 .venv/
