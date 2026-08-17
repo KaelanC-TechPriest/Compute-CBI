@@ -121,9 +121,12 @@ def main() -> int:
     predicted = np.array(predicted)
 
     rmse = float(np.sqrt(np.mean((predicted - observed) ** 2)))
-    bias = float(np.mean(predicted - observed))
     r = float(np.corrcoef(observed, predicted)[0, 1])
-    print(f"RMSE={rmse:.3f}  mean bias (predicted - observed)={bias:+.3f}  Pearson r={r:.3f}", flush=True)
+    r_squared = r ** 2
+    fit_slope, fit_intercept = np.polyfit(predicted, observed, 1)
+    print(f"RMSE={rmse:.3f}  Pearson r={r:.3f}  "
+          f"R²={r_squared:.3f}  best fit: observed = {fit_slope:.3f}*predicted + {fit_intercept:+.3f}",
+          flush=True)
 
     if args.out_csv is not None:
         args.out_csv.parent.mkdir(parents=True, exist_ok=True)
@@ -140,13 +143,14 @@ def main() -> int:
     ax.set_facecolor("#fcfcfb")
 
     zero_obs = observed == 0
-    ax.scatter(predicted[~zero_obs], observed[~zero_obs], s=28, color="#2a78d6",
-              alpha=0.35, linewidths=0)
-    ax.scatter(predicted[zero_obs], observed[zero_obs], s=28, color="#e34948",
+    ax.scatter(predicted[~zero_obs], observed[~zero_obs], s=56, color="#2a78d6",
+              alpha=0.35, linewidths=0, label="Observed CBI > 0")
+    ax.scatter(predicted[zero_obs], observed[zero_obs], s=56, color="#e34948",
               alpha=0.35, linewidths=0, label="Observed CBI = 0", zorder=3)
 
     lo, hi = 0.0, 3.0
-    ax.plot([lo, hi], [lo, hi], color="#c3c2b7", linestyle="--", linewidth=1.5, label="1:1 line")
+    ax.plot([lo, hi], [fit_slope * lo + fit_intercept, fit_slope * hi + fit_intercept],
+           color="black", linestyle="-", linewidth=1.5, label="Best fit")
 
     ax.set_xlim(lo, hi)
     ax.set_ylim(lo, hi)
@@ -159,14 +163,17 @@ def main() -> int:
     for spine in ("top", "right"):
         ax.spines[spine].set_visible(False)
     for spine in ("left", "bottom"):
-        ax.spines[spine].set_color("#c3c2b7")
+        ax.spines[spine].set_color("black")
     ax.grid(True, color="#e1e0d9", linewidth=0.8)
     ax.set_axisbelow(True)
     legend = ax.legend(frameon=False, loc="upper left")
     for text in legend.get_texts():
         text.set_color("#0b0b0b")
+    for handle in legend.legend_handles:
+        handle.set_alpha(1)
 
-    ax.text(0.98, 0.03, f"RMSE = {rmse:.3f}\nBias = {bias:+.3f}\nPearson r = {r:.3f}",
+    ax.text(0.98, 0.03,
+           f"RMSE = {rmse:.3f}\n\nPearson r = {r:.3f}\nR² = {r_squared:.3f}",
            transform=ax.transAxes, ha="right", va="bottom", color="#0b0b0b",
            fontsize=10, bbox=dict(facecolor="#fcfcfb", edgecolor="#c3c2b7", boxstyle="round,pad=0.4"))
 
