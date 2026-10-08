@@ -118,6 +118,9 @@ def main() -> int:
     if args.start_year < 1986:
         p.error(f"Start year out of bounds (must be in range 1986-present)")
 
+    if args.end_year > date.today().year:
+        p.error(f"End year out of bounds")
+
     if args.end_year > date.today().year - 2:
         print(f"WARNING: End year is less than 2 years from present. Landsat \
         data may be sparse after {date.today().year - 2}, so CBI coverage may \
