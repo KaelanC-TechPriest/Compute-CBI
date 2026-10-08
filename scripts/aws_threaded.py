@@ -30,6 +30,7 @@ import numpy as np
 import xarray as xr
 from shapely import GeometryCollection, MultiPolygon, Polygon
 from shapely.geometry.base import BaseGeometry
+from datetime import date
 import rioxarray  # noqa: F401  -- registers the `.rio` accessor
 from rasterio.warp import transform_bounds
 from shapely.geometry import box as shapely_box
@@ -111,11 +112,16 @@ def main() -> int:
         if unknown:
             p.error(f"Unknown state(s) '{", ".join(unknown)}'. Known states: {', '.join(sorted(STATE_WINDOWS))}")
 
-    if args.start_year < 1986 or args.start_year > 2024:
-        p.error("Start year out of bounds (must be in range 1986-2024)")
+    if args.start_year > args.end_year:
+        p.error(f"Start year ({args.start_year}) is after end year ({args.end_year}).")
 
-    if args.end_year < 1986 or args.end_year > 2024:
-        p.error("End year out of bounds (must be in range 1986-2024)")
+    if args.start_year < 1986:
+        p.error(f"Start year out of bounds (must be in range 1986-present)")
+
+    if args.end_year > date.today().year - 2:
+        print(f"WARNING: End year is less than 2 years from present. Landsat \
+        data may be sparse after {date.today().year - 2}, so CBI coverage may \
+        be incomplete for some fires.")
 
     if not _aws_creds_available():
         print(f"warning: no AWS credentials detected. {_S3_AUTH_HINT}\n"

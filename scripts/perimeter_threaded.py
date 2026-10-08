@@ -15,6 +15,7 @@ Run:
 from __future__ import annotations
 
 import argparse
+from datetime import date
 import queue
 import sys
 import threading
@@ -67,11 +68,16 @@ def main() -> int:
         if args.state not in STATE_WINDOWS:
             p.error(f"Unknown state '{args.state}'. Known: {', '.join(sorted(STATE_WINDOWS))}")
 
-    if args.start_year < 1986 or args.start_year > 2020:
-        p.error(f"Start year out of bounds (must be in range 1986-2020)")
+    if args.start_year > args.end_year:
+        p.error(f"Start year ({args.start_year}) is after end year ({args.end_year}).")
 
-    if args.end_year < 1986 or args.end_year > 2020:
-        p.error(f"End year out of bounds (must be in range 1986-2020)")
+    if args.start_year < 1986:
+        p.error(f"Start year out of bounds (must be in range 1986-present)")
+
+    if args.end_year > date.today().year - 2:
+        print(f"WARNING: End year is less than 2 years from present. Landsat \
+        data may be sparse after {date.today().year - 2}, so CBI coverage may \
+        be incomplete for some fires.")
 
     start_time = time.perf_counter()
 
