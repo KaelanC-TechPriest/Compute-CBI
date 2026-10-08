@@ -153,7 +153,7 @@ The scripts do not filter for NLCD classes at this time. This means that the dat
 
 ![Forested only plot](./assets/nlcd_raw_pdf_bars.png)
 
-![Non-forested plot](./assets/nlcd_non_forest_raw.png.png)
+![Non-forested plot](./assets/nlcd_non_forest_raw.png)
 
 - Lacks a non-processing-area-mask, so bodies of water will be given a CBI number.
 - Not all fires are complete, like the fire `TX3417209989919910222`, which has 89% of its area as missing data.
