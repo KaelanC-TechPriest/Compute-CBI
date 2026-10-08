@@ -66,6 +66,10 @@ uv run python scripts/oneshot.py --gpkg data/fire_perims/test.gpkg --index 80 --
 > from an S3 bucket. You can set credentials with `aws configure`, creating
 > access keys, or assigning a IAM role to your EC2 instance.
 
+The AWS instance used to build the dataset was created using
+[terraform](https://developer.hashicorp.com/terraform) and [this](docs/main.tf)
+configuration. Please note, this instance does cost a decent amount of money to
+run continuously. The scripts will work on smaller instances.
 
 ## Examples
 
@@ -94,7 +98,37 @@ is the expected signal for a real forested wildfire.
 
 ### Example 2: All fires in Montana
 
+Process every MTBS wildfire perimeter whose `Event_ID` starts with `MT`
+(multithreaded AWS Landsat fetch). Outputs land under `data/cbi/MT/<year>/`.
+
+```bash
+uv run python scripts/aws_threaded.py \
+  --gpkg data/fire_perims/mtbs/mtbs_perims_trimmed.gpkg \
+  --state MT \
+  --out-dir data/cbi/MT \
+  --workers 4
+```
+
+- `--state` accepts a comma-separated list (e.g. `MT,ID,WY`).
+- Existing `*_CBI.tif` / `*_CBI_bc.tif` pairs are skipped.
+- Large perimeters are split automatically so each worker stays within RAM limits.
+
 ### Example 3: All fires in 2000
+
+Same script, restricted to ignition year 2000 (CONUS-wide unless `--state` is also set).
+Each fire is written under `--out-dir/<year>/`, e.g. `data/cbi/2000/<Event_ID>_CBI.tif`.
+
+```bash
+uv run python scripts/aws_threaded.py \
+  --gpkg data/fire_perims/mtbs/mtbs_perims_trimmed.gpkg \
+  --start-year 2000 \
+  --end-year 2000 \
+  --out-dir data/cbi \
+  --workers 4
+```
+
+Use `--start-year` / `--end-year` together for any inclusive range (bounds: 1986–2024).
+Combine with `--state` when you only want one (or a few) states in that window.
 
 ## Output
 
