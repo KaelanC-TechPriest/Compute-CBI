@@ -224,6 +224,34 @@ def load_or_download_scene(item, cache_dir: Path, grid, raw_path: Path | None = 
 
 
 def _search(bbox, start, end, max_cloud, start_day, end_day, aws=True) -> List[Item]:
+    """Search Planetary Computer STAC for Landsat C2 L2 items over a fire bbox.
+
+    Queries ``COLLECTION`` (``landsat-c2-l2``) for scenes intersecting ``bbox``
+    between ``start`` and ``end`` with cloud cover strictly less than
+    ``max_cloud``. When ``start_day`` is set, results are further restricted to
+    that inclusive day-of-year window (the state seasonal imaging season from
+    ``STATE_WINDOWS``). Items with a missing ``datetime`` are dropped by the
+    DOY filter. Returned items are sorted chronologically (``None`` timestamps
+    sort as ``datetime.min``).
+
+    Args:
+        bbox: WGS84 bounding box ``(minx, miny, maxx, maxy)`` in EPSG:4326.
+        start: Inclusive start date string for the STAC ``datetime`` range
+            (e.g. ``"2014-01-01"``).
+        end: Inclusive end date string for the STAC ``datetime`` range
+            (e.g. ``"2019-01-01"``).
+        max_cloud: Maximum ``eo:cloud_cover`` percent (exclusive upper bound).
+        start_day: Inclusive start day-of-year for the seasonal filter, or
+            ``None`` to skip DOY filtering.
+        end_day: Inclusive end day-of-year for the seasonal filter (used only
+            when ``start_day`` is not ``None``).
+        aws: If ``True``, open the STAC client without PC signing (hrefs are
+            resolved later via AWS/S3). If ``False``, sign assets in-place for
+            Planetary Computer HTTPS reads and use a longer-timeout transport.
+
+    Returns:
+        Matching STAC ``Item``s, sorted by ``datetime`` ascending.
+    """
     if aws:
         cat = pystac_client.Client.open(AWS_STAC_URL)
     else:
