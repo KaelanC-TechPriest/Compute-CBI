@@ -20,8 +20,7 @@ from rasterio.windows import Window
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from utils import (
-    BANDS, COLLECTION, OPTICAL, QA, QA_MASK_BITS, RES, SR_OFFSET, SR_SCALE,
-    _GDAL_ENV_AWS, composite, fire_grid, _search
+    OPTICAL, composite, fire_grid, _search, _item_window
 )
 
 # ---------------------------------------------------------------------------- constants
@@ -62,88 +61,6 @@ def _is_s3_auth_error(err: Exception) -> bool:
         "request payer", "requester pays", "not authorized", "signature",
     ))
 
-def _item_window(
-    item: pystac.Item,
-    grid: tuple[int, Affine, int, int],
-    debug: bool = False,
-) -> xr.DataArray | None:
-    """Read the fire-bbox window of an item, scale + QA-mask, reproject to grid."""
-
-    def _read_band(band: str, path: str, win: Window):
-        with rasterio.Env(**_GDAL_ENV_AWS):
-            with rasterio.open(path) as ds:
-                return band, ds.read(1, window=win)
-
-    t0 = time.perf_counter() if debug else 0.0
-    g_epsg, g_tr, g_w, g_h = grid
-    epsg = int(item.properties["proj:code"].split(":")[1])
-    tr = item.properties["proj:transform"]
-    sh = item.properties["proj:shape"]
-    H, W = int(sh[0]), int(sh[1])
-    A = Affine(*tr[:6])
-
-    left = g_tr.c
-    top = g_tr.f
-    right = left + g_w * RES
-    bottom = top - g_h * RES
-    minx, miny, maxx, maxy = transform_bounds(f"EPSG:{g_epsg}", f"EPSG:{epsg}",
-                                              left, bottom, right, top)
-    c0 = max(0, math.floor((minx - A.c) / A.a))
-    c1 = min(W, math.ceil((maxx - A.c) / A.a))
-    r0 = max(0, math.floor((maxy - A.f) / A.e))
-    r1 = min(H, math.ceil((miny - A.f) / A.e))
-    if c1 <= c0 or r1 <= r0:
-        return None
-    win = Window(c0, r0, c1 - c0, r1 - r0)
-    wtr = A * Affine.translation(c0, r0)
-
-    arr = {}
-    t_s3 = time.perf_counter() if debug else 0.0
-    with rasterio.Env(**_GDAL_ENV_AWS):
-        paths = {
-            band: item.assets[band].href.replace("s3://", "/vsis3/")
-            for band in BANDS
-        }
-
-        with ThreadPoolExecutor(max_workers=4) as ex:
-            futures = {
-                ex.submit(_read_band, band, path, win): band
-                for band, path in paths.items()
-            }
-
-            for fut in as_completed(futures):
-                band, data = fut.result()
-                arr[band] = data
-
-    t_s3_done = time.perf_counter() if debug else 0.0
-
-    h, w = arr[QA].shape
-    xs = wtr.c + (np.arange(w) + 0.5) * wtr.a
-    ys = wtr.f + (np.arange(h) + 0.5) * wtr.e
-    maskbits = 0
-    for b in QA_MASK_BITS:
-        maskbits |= 1 << b
-    invalid = (arr[QA].astype("uint16") & maskbits) != 0
-    opt = np.stack([arr[b].astype("float32") * SR_SCALE + SR_OFFSET for b in OPTICAL])
-    opt[:, invalid] = np.nan
-
-    da = xr.DataArray(opt, dims=("band", "y", "x"),
-                      coords={"band": OPTICAL, "y": ys, "x": xs})
-    da = da.rio.write_crs(epsg).rio.write_nodata(np.nan)
-    t_repro = time.perf_counter() if debug else 0.0
-    out = da.rio.reproject(f"EPSG:{g_epsg}", transform=g_tr, shape=(g_h, g_w),
-                           resampling=Resampling.bilinear, nodata=np.nan)
-    if debug:
-        print(
-            f"debug [_item_window]: s3_read={t_s3_done - t_s3:.2f}s "
-            f"reproject={time.perf_counter() - t_repro:.2f}s "
-            f"total={time.perf_counter() - t0:.2f}s "
-            f"win={int(win.width)}x{int(win.height)} id={item.id}",
-            flush=True,
-        )
-    return out.drop_vars("spatial_ref", errors="ignore")
-
-
 # ------------------------------------------------------------------------------ fetch
 def fetch_landsat(bbox, year, start_day, end_day, max_cloud):
     grid = fire_grid(bbox)
@@ -155,7 +72,7 @@ def fetch_landsat(bbox, year, start_day, end_day, max_cloud):
     arrs = []
     try:
         for it in items:
-            a = _item_window(it, grid)
+            a = _item_window(it, grid, aws=True)
             if a is not None:
                 arrs.append(a.assign_coords(time=it.datetime).expand_dims("time"))
     except RasterioIOError as e:
@@ -217,7 +134,7 @@ def lazy_fetch_and_composite(
 
 
         def _fetch_item(it):
-            a = _item_window(it, grid, debug=debug)
+            a = _item_window(it, grid, debug=debug, aws=True)
             if a is None:
                 return None
             return a.assign_coords(time=it.datetime).expand_dims("time")

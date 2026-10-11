@@ -3,11 +3,13 @@ from __future__ import annotations
 
 import math
 import warnings
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
 import geopandas as gpd
 import joblib
+import pystac
 import numpy as np
 import pandas as pd
 import planetary_computer
@@ -24,6 +26,7 @@ from rasterio.warp import transform_bounds
 from rasterio.windows import Window
 from rioxarray.exceptions import NoDataInBounds
 from sklearn.ensemble import RandomForestRegressor
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # --------------------------------------------------------------------------- paths
 REPO = Path(__file__).resolve().parents[1]
@@ -233,7 +236,7 @@ def load_or_download_scene(item, cache_dir: Path, grid, raw_path: Path | None = 
                 return da.assign_coords(band=OPTICAL).drop_vars("spatial_ref", errors="ignore")
 
     _scene_cache_stats["misses"] += 1
-    result = _item_window(item, grid, raw_path=raw_path)
+    result = _item_window(item, grid, raw_path=raw_path, aws=False)
     if result is not None:
         cache_path.parent.mkdir(parents=True, exist_ok=True)
         result.rio.write_crs(f"EPSG:{g_epsg}").rio.to_raster(
@@ -332,26 +335,49 @@ def _download_raw_scene(item, bbox_4326, out_path: Path) -> bool:
     return True
 
 
-def _item_window(item, grid, raw_path: Path | None = None):
-    """Read the fire-bbox window of an item, scale + QA-mask, reproject to grid.
+def _item_window(item: pystac.Item, grid: tuple[int, Affine, int, int],
+                 raw_path: Path | None = None, debug=False, aws=False
+                 ) -> xr.DataArray | None:
+    """Read one Landsat item over the fire grid: window, scale, QA-mask, reproject.
 
-    If raw_path points to an existing state-level raw cache file, reads from it
-    (native projection, multi-band) instead of fetching from remote STAC assets.
+    Computes the overlap of ``grid`` with the item's native CRS/transform, reads
+    all ``BANDS`` (optical + ``qa_pixel``) in parallel (4 threads), applies the
+    Collection-2 scale/offset and QA bit mask, then bilinear-reprojects onto
+    ``grid``. With ``aws=True``, asset hrefs are opened via ``/vsis3/`` under
+    ``_GDAL_ENV_AWS`` (requester-pays); otherwise HTTPS hrefs are opened under
+    ``_GDAL_ENV_PC`` (``/vsicurl/`` prefix stripped).
+
+    Args:
+        item: STAC item with ``proj:code``, ``proj:transform``, ``proj:shape``,
+            and band assets named in ``BANDS``.
+        grid: Target grid as ``(epsg, Affine, width, height)`` from
+            ``fire_grid`` (30 m UTM).
+        raw_path: Unused (kept for call-site compatibility with the old
+            on-disk raw-cache path). Reading from a cached multi-band GeoTIFF
+            is not implemented in this merged version.
+        debug: If ``True``, print band-read and reproject timings.
+        aws: If ``True``, use S3/``/vsis3/`` + AWS GDAL env; if ``False``
+            (default), use Planetary Computer-style HTTPS reads.
+
+    Returns:
+        ``(band, y, x)`` DataArray on ``grid`` with optical bands scaled to
+        reflectance and QA-masked to NaN, or ``None`` if the item does not
+        overlap ``grid``.
     """
-    g_epsg, g_tr, g_w, g_h = grid
 
-    use_raw = raw_path is not None and raw_path.is_file()
-    if use_raw:
-        with rasterio.open(raw_path) as meta_ds:  # type: ignore[arg-type]
-            epsg = meta_ds.crs.to_epsg()
-            A: Affine = meta_ds.transform
-            H, W = meta_ds.height, meta_ds.width
-    else:
-        epsg = int(item.properties["proj:code"].split(":")[1])
-        tr = item.properties["proj:transform"]
-        sh = item.properties["proj:shape"]
-        H, W = int(sh[0]), int(sh[1])
-        A = Affine(*tr[:6])
+    GDAL_ENV = _GDAL_ENV_AWS if aws else _GDAL_ENV_PC
+    def _read_band(band: str, path: str, win: Window):
+        with rasterio.Env(**GDAL_ENV):
+            with rasterio.open(path) as ds:
+                return band, ds.read(1, window=win)
+
+    t0 = time.perf_counter() if debug else 0.0
+    g_epsg, g_tr, g_w, g_h = grid
+    epsg = int(item.properties["proj:code"].split(":")[1])
+    tr = item.properties["proj:transform"]
+    sh = item.properties["proj:shape"]
+    H, W = int(sh[0]), int(sh[1])
+    A = Affine(*tr[:6])
 
     left = g_tr.c
     top = g_tr.f
@@ -368,17 +394,29 @@ def _item_window(item, grid, raw_path: Path | None = None):
     win = Window(c0, r0, c1 - c0, r1 - r0)  # type: ignore[call-arg]
     wtr: Affine = A * Affine.translation(c0, r0)  # type: ignore[assignment]
 
+    t_s3 = time.perf_counter() if debug else 0.0
+
     arr = {}
-    if use_raw:
-        with rasterio.open(raw_path) as ds:  # type: ignore[arg-type]
-            for bi, band in enumerate(BANDS, start=1):
-                arr[band] = ds.read(bi, window=win)
-    else:
-        with rasterio.Env(**_GDAL_ENV_PC):  # type: ignore[arg-type]
-            for band in BANDS:
-                url = item.assets[band].href.removeprefix("/vsicurl/")
-                with rasterio.open(url) as ds:
-                    arr[band] = ds.read(1, window=win)
+    with rasterio.Env(**GDAL_ENV):
+        paths = {
+            band: (
+                    item.assets[band].href.replace("s3://", "/vsis3/") 
+                    if aws
+                    else item.assets[band].href.removeprefix("/vsicurl/")
+            )
+            for band in BANDS
+        }
+
+        with ThreadPoolExecutor(max_workers=4) as ex:
+            futures = {
+                ex.submit(_read_band, band, path, win): band
+                for band, path in paths.items()
+            }
+            for fut in as_completed(futures):
+                band, data = fut.result()
+                arr[band] = data
+
+    t_s3_done = time.perf_counter() if debug else 0.0
 
     h, w = arr[QA].shape
     xs = wtr.c + (np.arange(w) + 0.5) * wtr.a
@@ -393,8 +431,15 @@ def _item_window(item, grid, raw_path: Path | None = None):
     da = xr.DataArray(opt, dims=("band", "y", "x"),
                       coords={"band": OPTICAL, "y": ys, "x": xs})
     da = da.rio.write_crs(epsg).rio.write_nodata(np.nan)
+    t_repro = time.perf_counter() if debug else 0.0
     out = da.rio.reproject(f"EPSG:{g_epsg}", transform=g_tr, shape=(g_h, g_w),
                            resampling=Resampling.bilinear, nodata=np.nan)
+    if debug:
+        print(f"debug [_item_window]: read={t_s3_done - t_s3:.2f}s")
+        print(f"  reproject={time.perf_counter() - t_repro:.2f}s")
+        print(f"  total={time.perf_counter() - t0:.2f}s")
+        print(f"  win={int(win.width)}x{int(win.height)}")
+        print(f"  id={item.id}")
     return out.drop_vars("spatial_ref", errors="ignore")
 
 
@@ -413,9 +458,9 @@ def fetch_landsat(bbox, year, start_day, end_day, max_cloud,
             if cache_processed:
                 a = load_or_download_scene(it, landsat_cache, grid, raw_path=rp)
             else:
-                a = _item_window(it, grid, raw_path=rp)
+                a = _item_window(it, grid, raw_path=rp, aws=False)
         else:
-            a = _item_window(it, grid)
+            a = _item_window(it, grid, aws=False)
         if a is not None:
             arrs.append(a.assign_coords(time=it.datetime).expand_dims("time"))
     if not arrs:
