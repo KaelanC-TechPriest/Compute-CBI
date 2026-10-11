@@ -30,11 +30,35 @@ scripts/
 - `data/fire_perims/` — Fire perimeters saved as GeoPackage (.gpkg) files. Too
 large to put on github.
 
+## Dependencies
+
+- `uv` [https://docs.astral.sh/uv/](https://docs.astral.sh/uv/)
+- `python` >=3.12 (can be installed with `uv`)
+
+`uv` will install the following dependencies (see [pyproject.toml](./pyproject.toml)):
+
+- geopandas
+- rioxarray
+- rasterio
+- affine
+- pyproj
+- shapely
+- pyogrio
+- xarray
+- numpy
+- pandas
+- scikit-learn
+- joblib
+- pystac-client
+- planetary-computer
+- requests
+- h5netcdf
+- h5py
+- matplotlib>=3.11.1
+
 ## Download & run
 
-Install `uv` if you don't have it (see [https://docs.astral.sh/uv/](https://docs.astral.sh/uv/)). Then, from this directory:
-
-clone the repository
+First, clone the repository
 
 ```bash
 git clone https://github.com/KaelanC-TechPriest/Compute-CBI
