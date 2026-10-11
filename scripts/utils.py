@@ -47,7 +47,8 @@ DEF_URL = (
 NODATA_DEF = -9999
 
 # ---------------------------------------------------------------------------- landsat
-STAC_URL = "https://planetarycomputer.microsoft.com/api/stac/v1"
+PC_STAC_URL = "https://planetarycomputer.microsoft.com/api/stac/v1"
+AWS_STAC_URL = "https://earth-search.aws.element84.com/v1"
 COLLECTION = "landsat-c2-l2"
 OPTICAL = ["blue", "green", "red", "nir08", "swir16", "swir22"]
 QA = "qa_pixel"
@@ -155,11 +156,8 @@ def read_perimeter(gpkg: str, event_id: str | None = None,
         if not 0 <= index < len(gdf):
             raise SystemExit(f"index {index} out of range (0..{len(gdf) - 1})")
         row = gdf.iloc[index]
-    else:  # default: first wildfire
-        wf = gdf[gdf["Incid_Type"] == WILDFIRE_CODE] if "Incid_Type" in gdf else gdf
-        if wf.empty:
-            raise SystemExit("no wildfire perimeter found")
-        row = wf.iloc[0]
+    else:
+        raise SystemExit("no wildfire perimeter found")
     eid, state = row["Event_ID"], str(row["Event_ID"])[:2].upper()
     if state not in STATE_WINDOWS:
         raise SystemExit(f"{eid}: no image-season window for state {state!r}")
@@ -225,10 +223,13 @@ def load_or_download_scene(item, cache_dir: Path, grid, raw_path: Path | None = 
     return result
 
 
-def _search(bbox, start, end, max_cloud, start_day, end_day):
-    """Query Planetary Computer STAC for Landsat scenes filtered by cloud cover and DOY window."""
-    cat = pystac_client.Client.open(STAC_URL, modifier=planetary_computer.sign_inplace,
-                                    stac_io=StacApiIO(timeout=360, max_retries=15))
+def _search(bbox, start, end, max_cloud, start_day, end_day, aws=True) -> List[Item]:
+    if aws:
+        cat = pystac_client.Client.open(AWS_STAC_URL)
+    else:
+        cat = pystac_client.Client.open(
+            PC_STAC_URL, modifier=planetary_computer.sign_inplace,
+            stac_io=StacApiIO(timeout=360, max_retries=15))
     items = list(cat.search(
         collections=[COLLECTION], bbox=list(bbox), datetime=f"{start}/{end}",
         query={"eo:cloud_cover": {"lt": max_cloud}},

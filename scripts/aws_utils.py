@@ -21,7 +21,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from utils import (
     BANDS, COLLECTION, OPTICAL, QA, QA_MASK_BITS, RES, SR_OFFSET, SR_SCALE,
-    composite, fire_grid,
+    composite, fire_grid, _search
 )
 
 # ---------------------------------------------------------------------------- constants
@@ -81,21 +81,6 @@ def _is_s3_auth_error(err: Exception) -> bool:
         "access denied", "403", "credential", "aws_secret",
         "request payer", "requester pays", "not authorized", "signature",
     ))
-
-
-# ------------------------------------------------------------------------------ search
-def _search(bbox, start, end, max_cloud, start_day, end_day):
-    cat = pystac_client.Client.open(STAC_URL)
-    items = list(cat.search(
-        collections=[COLLECTION], bbox=list(bbox), datetime=f"{start}/{end}",
-        query={"eo:cloud_cover": {"lt": max_cloud}},
-    ).items())
-    if start_day is not None:
-        items = [it for it in items
-                 if start_day <= it.datetime.timetuple().tm_yday <= end_day]
-    items.sort(key=lambda it: it.datetime)
-    return items
-
 
 def _item_window(
     item: pystac.Item,
