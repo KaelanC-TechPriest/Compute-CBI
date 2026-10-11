@@ -7,10 +7,10 @@ Method: Parks et al. (2019), *Remote Sensing* 11, 1735 — a Random Forest of La
 ## What's included
 ```
 scripts/
-├── oneshot.py - The original oneshot file provided by Fred Bunt.
+├── pc_oneshot.py - The original oneshot file provided by Fred Bunt.
 ├── aws_oneshot.py - The oneshot script modified for use on AWS EC2, also by Fred.
 ├── aws_threaded.py - Multithreaded, AWS-compatible.
-├── perimeter_threaded.py - Multithreaded, pulls from Planetary Computer.
+├── pc_threaded.py - Multithreaded, pulls from Planetary Computer.
 ├── aws_utils.py - A collection of functions for running on AWS.
 ├── utils.py - A collection of commonly used functions.
 ├── data_analysis/ - LLM generated plotting & analysis utilities
