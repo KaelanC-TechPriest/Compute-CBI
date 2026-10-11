@@ -21,31 +21,11 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 from utils import (
     BANDS, COLLECTION, OPTICAL, QA, QA_MASK_BITS, RES, SR_OFFSET, SR_SCALE,
-    composite, fire_grid, _search
+    _GDAL_ENV_AWS, composite, fire_grid, _search
 )
 
 # ---------------------------------------------------------------------------- constants
 STAC_URL = "https://earth-search.aws.element84.com/v1"
-_GDAL_ENV = {
-    "AWS_REGION": "us-west-2",
-    "AWS_REQUEST_PAYER": "requester", # The `usgs-landsat` COG bucket is requester-pays in us-west-2; GDAL's native S3 driver resolves AWS credentials from the env / ~/.aws (no boto3 needed).
-    "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.TIF,.tiff", # Earth Search hrefs are uppercase `..._SR_B4.TIF`; the allow-list match is case-sensitive, so `.TIF` must be present or GDAL refuses to open them.
-    "CPL_VSIL_CURL_CACHE_SIZE": "800000000",        # ~200 MB VSI curl cache
-    "CPL_VSIL_CURL_CHUNK_SIZE": "2097152",      # 2 MB (default is much smaller)
-    "CPL_VSIL_CURL_USE_HEAD": "NO",                 # sometimes helps with S3
-    # "GDAL_CACHEMAX": 1073741824,  # 1 GB in bytes; rasterio calls GDALSetCacheMax64() directly so bytes are required.
-    "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",   # faster open on S3
-    "GDAL_HTTP_MAX_CACHED_CONNECTIONS": "100",     # keep-alive cache (GDAL ≥ 3.11)
-    "GDAL_HTTP_MAX_RETRY": "3",
-    "GDAL_HTTP_MAX_TOTAL_CONNECTIONS": "200",      # total simultaneous connections
-    "GDAL_HTTP_MERGE_CONSECUTIVE_RANGES": "YES",
-    "GDAL_HTTP_MULTIPLEX": "YES",
-    "GDAL_HTTP_MULTIRANGE": "YES",                 # or "SERIAL" / "SINGLE_GET"
-    "GDAL_HTTP_RETRY_DELAY": "1",
-    "GDAL_HTTP_VERSION": "2",                  # helps multiplexing when supported
-    "VSI_CACHE": "TRUE",
-    "VSI_CACHE_SIZE": "25000000",              # 25 MB per-file cache
-}
 _S3_AUTH_HINT = (
     "Earth Search streams Landsat from the requester-pays `usgs-landsat` bucket "
     "(us-west-2), which needs AWS credentials. Set them with `aws configure` or the "
@@ -90,7 +70,7 @@ def _item_window(
     """Read the fire-bbox window of an item, scale + QA-mask, reproject to grid."""
 
     def _read_band(band: str, path: str, win: Window):
-        with rasterio.Env(**_GDAL_ENV):
+        with rasterio.Env(**_GDAL_ENV_AWS):
             with rasterio.open(path) as ds:
                 return band, ds.read(1, window=win)
 
@@ -119,7 +99,7 @@ def _item_window(
 
     arr = {}
     t_s3 = time.perf_counter() if debug else 0.0
-    with rasterio.Env(**_GDAL_ENV):
+    with rasterio.Env(**_GDAL_ENV_AWS):
         paths = {
             band: item.assets[band].href.replace("s3://", "/vsis3/")
             for band in BANDS

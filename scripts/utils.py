@@ -58,12 +58,30 @@ QA_MASK_BITS = (0, 1, 3, 4, 5, 7)  # fill, dilated cloud, cloud, shadow, snow, w
 INDICES = ["nbr", "ndvi", "ndmi", "evi", "mirbi"]
 RES = 30
 DEFAULT_MAX_CLOUD = 80.0
-_GDAL_ENV = {
-    "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
-    "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif",
-    "GDAL_HTTP_MULTIRANGE": "YES",
+_GDAL_ENV_PC = {
+    "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",   # faster open on S3
+    "CPL_VSIL_CURL_ALLOWED_EXTENSIONS": ".tif,.TIF,.tiff", # Earth Search hrefs are uppercase `..._SR_B4.TIF`; the allow-list match is case-sensitive, so `.TIF` must be present or GDAL refuses to open them.
+    "GDAL_HTTP_MULTIRANGE": "YES",                 # or "SERIAL" / "SINGLE_GET"
     "GDAL_HTTP_MERGE_CONSECUTIVE_RANGES": "YES",
     "GDAL_HTTP_TIMEOUT": "360",
+}
+_GDAL_ENV_AWS = _GDAL_ENV_PC | {
+    "AWS_REGION": "us-west-2",
+    "AWS_REQUEST_PAYER": "requester", # The `usgs-landsat` COG bucket is requester-pays in us-west-2; GDAL's native S3 driver resolves AWS credentials from the env / ~/.aws (no boto3 needed).
+    "CPL_VSIL_CURL_CACHE_SIZE": "800000000",        # ~200 MB VSI curl cache
+    "CPL_VSIL_CURL_CHUNK_SIZE": "2097152",      # 2 MB (default is much smaller)
+    "CPL_VSIL_CURL_USE_HEAD": "NO",                 # sometimes helps with S3
+    # "GDAL_CACHEMAX": 1073741824,  # 1 GB in bytes; rasterio calls GDALSetCacheMax64() directly so bytes are required.
+    "GDAL_DISABLE_READDIR_ON_OPEN": "EMPTY_DIR",
+    "GDAL_HTTP_MAX_CACHED_CONNECTIONS": "100",     # keep-alive cache (GDAL ≥ 3.11)
+    "GDAL_HTTP_MAX_RETRY": "3",
+    "GDAL_HTTP_MAX_TOTAL_CONNECTIONS": "200",      # total simultaneous connections
+    "GDAL_HTTP_MULTIPLEX": "YES",
+    "GDAL_HTTP_RETRY_DELAY": "1",
+    "GDAL_HTTP_TIMEOUT": "360",
+    "GDAL_HTTP_VERSION": "2",                  # helps multiplexing when supported
+    "VSI_CACHE_SIZE": "25000000",              # 25 MB per-file cache
+    "VSI_CACHE": "TRUE",
 }
 PADDING = 1000.0
 
@@ -293,7 +311,7 @@ def _download_raw_scene(item, bbox_4326, out_path: Path) -> bool:
     wtr: Affine = A * Affine.translation(c0, r0)  # type: ignore[assignment]
 
     arrays = []
-    with rasterio.Env(**_GDAL_ENV):  # type: ignore[arg-type]
+    with rasterio.Env(**_GDAL_ENV_PC):  # type: ignore[arg-type]
         for band in BANDS:
             with rasterio.open(item.assets[band].href.removeprefix("/vsicurl/")) as ds:
                 arrays.append(ds.read(1, window=win))
@@ -356,7 +374,7 @@ def _item_window(item, grid, raw_path: Path | None = None):
             for bi, band in enumerate(BANDS, start=1):
                 arr[band] = ds.read(bi, window=win)
     else:
-        with rasterio.Env(**_GDAL_ENV):  # type: ignore[arg-type]
+        with rasterio.Env(**_GDAL_ENV_PC):  # type: ignore[arg-type]
             for band in BANDS:
                 url = item.assets[band].href.removeprefix("/vsicurl/")
                 with rasterio.open(url) as ds:
