@@ -126,7 +126,7 @@ Process every MTBS wildfire perimeter whose `Event_ID` starts with `MT`
 uv run python scripts/aws_threaded.py \
   --gpkg data/fire_perims/mtbs/mtbs_perims_trimmed.gpkg \
   --state MT \
-  --out-dir data/cbi/MT \
+  --out-dir out/ \
   --workers 4
 ```
 
@@ -144,7 +144,7 @@ uv run python scripts/aws_threaded.py \
   --gpkg data/fire_perims/mtbs/mtbs_perims_trimmed.gpkg \
   --start-year 2000 \
   --end-year 2000 \
-  --out-dir data/cbi \
+  --out-dir out/ \
   --workers 4
 ```
 
@@ -153,7 +153,29 @@ Combine with `--state` when you only want one (or a few) states in that window.
 
 ## Output
 
-The raw (non-bias-corrected) output has been verified to be positively correlated with measured CBI. The plot below shows the correlation between predicted and measured CBI.
+The `aws_threaded` and `pc_threaded` scripts output in the following format:
+
+```raw
+./
+├── 1986/
+│   ├── [fire id].tif
+│   └── [fire id]_bc.tif
+├── 1987/
+│   ├── [fire id].tif
+│   └── [fire id]_bc.tif
+      . . .
+```
+
+Each file contains predictions for a single fire.
+
+> [!NOTE]
+> If you want to combine these fires into yearly rasters, you can use the
+> provided [mosaic script](./docs/build_cbi_mosaic.sh), which uses the `gdal`
+> CLI to mosaic years together.
+
+The raw (non-bias-corrected) output has been verified to be positively
+correlated with measured CBI. The plot below shows the correlation between
+predicted and measured CBI.
 
 <p align="center">
   <img src="./assets/observed_vs_predicted_cbi_raw.png" alt="predicted/measured plot" width="70%" />
