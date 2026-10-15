@@ -90,7 +90,7 @@ uv run python scripts/[desired script] ...
 > from an S3 bucket. You can set credentials with `aws configure`, creating
 > access keys, or assigning a IAM role to your EC2 instance.
 
-The AWS instance used to build the dataset was created using [terraform](https://developer.hashicorp.com/terraform) and [this](docs/main.tf) configuration. Please note, this instance does cost a decent amount of money to run continuously. The scripts will work on smaller instances.
+The AWS instance used to build the dataset was created using [terraform](https://developer.hashicorp.com/terraform) and [this](docs/main.tf) configuration. Please note, this instance does cost a decent amount of money to run continuously, but the scripts will work on smaller instances.
 
 ## Examples
 
