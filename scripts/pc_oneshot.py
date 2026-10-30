@@ -29,8 +29,9 @@ import numpy as np
 from utils import (
     DEF_NC, DEF_TIF, DEFAULT_MAX_CLOUD, MODEL_PATH, TRAIN_CSV,
     build_stack, composite, ensure_def, ensure_model,
-    fetch_landsat, predict, read_perimeter, to_5070_clip,
+    predict, read_perimeter, to_5070_clip,
 )
+from aws_utils import fetch_landsat
 
 
 def main() -> int:

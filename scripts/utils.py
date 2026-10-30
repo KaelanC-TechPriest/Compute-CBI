@@ -244,7 +244,7 @@ def load_or_download_scene(item, cache_dir: Path, grid, raw_path: Path | None = 
     return result
 
 
-def _search(bbox, start, end, max_cloud, start_day, end_day, aws=True) -> List[Item]:
+def _search(bbox, start, end, max_cloud, start_day, end_day, aws=False) -> List[Item]:
     """Search Planetary Computer STAC for Landsat C2 L2 items over a fire bbox.
 
     Queries ``COLLECTION`` (``landsat-c2-l2``) for scenes intersecting ``bbox``
@@ -441,36 +441,6 @@ def _item_window(item: pystac.Item, grid: tuple[int, Affine, int, int],
         print(f"  win={int(win.width)}x{int(win.height)}")
         print(f"  id={item.id}")
     return out.drop_vars("spatial_ref", errors="ignore")
-
-
-def fetch_landsat(bbox, year, start_day, end_day, max_cloud,
-                  landsat_cache: Path | None = None, state: str | None = None,
-                  cache_processed: bool = True):
-    """Fetch Landsat C2 L2 scenes for a fire bbox and return a (time, band, y, x) cube."""
-    grid = fire_grid(bbox)
-    items = _search(bbox, f"{year - 2}-01-01", f"{year + 3}-01-01",
-                    max_cloud, start_day, end_day)
-    arrs = []
-    for it in items:
-        rp = (raw_scene_path(landsat_cache, it, state)
-              if landsat_cache is not None and state is not None else None)
-        if landsat_cache is not None:
-            if cache_processed:
-                a = load_or_download_scene(it, landsat_cache, grid, raw_path=rp)
-            else:
-                a = _item_window(it, grid, raw_path=rp, aws=False)
-        else:
-            a = _item_window(it, grid, aws=False)
-        if a is not None:
-            arrs.append(a.assign_coords(time=it.datetime).expand_dims("time"))
-    if not arrs:
-        raise SystemExit("no overlapping Landsat scenes found")
-    cube = xr.concat(arrs, dim="time", coords="minimal",
-                     compat="override").assign_coords(band=OPTICAL)
-    cube.rio.write_crs(f"EPSG:{grid[0]}", inplace=True)
-    print(f"landsat: {cube.sizes['time']} scenes, grid "
-          f"{cube.sizes['y']}x{cube.sizes['x']} EPSG:{grid[0]}", flush=True)
-    return cube
 
 
 # ===================================================================== composite

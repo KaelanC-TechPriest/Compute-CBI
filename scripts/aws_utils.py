@@ -62,31 +62,61 @@ def _is_s3_auth_error(err: Exception) -> bool:
     ))
 
 # ------------------------------------------------------------------------------ fetch
-def fetch_landsat(bbox, year, start_day, end_day, max_cloud):
+def fetch_landsat(bbox, year, start_day, end_day, max_cloud,
+                  *, aws: bool = False, skip_fire_year: bool = True,
+                  debug: bool = False):
+    """Fetch Landsat C2 L2 scenes for a fire bbox into a (time, band, y, x) cube.
+
+    Searches Y-2..Y+2 (via ``_search``), optionally drops the fire year (unused by
+    the pre/post composite), reads each item with ``_item_window``, and concatenates
+    overlapping scenes.
+
+    Args:
+        bbox: WGS84 ``(minx, miny, maxx, maxy)``.
+        year: Fire ignition year.
+        start_day: Inclusive seasonal DOY start (or ``None`` to skip DOY filter).
+        end_day: Inclusive seasonal DOY end.
+        max_cloud: Max ``eo:cloud_cover`` percent for the STAC query.
+        aws: If ``True``, Earth Search + S3/``/vsis3/`` reads; if ``False``
+            (default), Planetary Computer HTTPS reads.
+        skip_fire_year: If ``True`` (default), drop scenes from ``year`` before
+            reading (~20% less I/O; composite only uses Y±1/Y±2).
+        debug: If ``True``, print cube shape summary.
+
+    Returns:
+        ``xarray`` DataArray cube with optical bands on the fire UTM grid.
+
+    Raises:
+        SystemExit: On S3 auth failures when ``aws=True``.
+        RuntimeError: If no scenes overlap the fire grid.
+    """
     grid = fire_grid(bbox)
     items = _search(bbox, f"{year - 2}-01-01", f"{year + 3}-01-01",
-                    max_cloud, start_day, end_day)
+                    max_cloud, start_day, end_day, aws=aws)
     # The composite only uses {Y-2, Y-1} (pre) and {Y+1, Y+2} (post); the fire
     # year is fetched-but-unused, so skip it before reading any bytes (~20% less).
-    items = [it for it in items if it.datetime.year != year]
+    if skip_fire_year:
+        items = [it for it in items
+                 if it.datetime is not None and it.datetime.year != year]
     arrs = []
     try:
         for it in items:
-            a = _item_window(it, grid, aws=True)
+            a = _item_window(it, grid, aws=aws, debug=debug)
             if a is not None:
                 arrs.append(a.assign_coords(time=it.datetime).expand_dims("time"))
     except RasterioIOError as e:
-        if _is_s3_auth_error(e):
+        if aws and _is_s3_auth_error(e):
             raise SystemExit(f"error: cannot read Landsat from S3. {_S3_AUTH_HINT}\n"
-                             f"  (underlying error: {e})")
+                             f"  (underlying error: {e})") from e
         raise
     if not arrs:
         raise RuntimeError("no overlapping Landsat scenes found")
     cube = xr.concat(arrs, dim="time", coords="minimal",
                      compat="override").assign_coords(band=OPTICAL)
     cube.rio.write_crs(f"EPSG:{grid[0]}", inplace=True)
-    # print(f"  landsat: {cube.sizes['time']} scenes, grid "
-    #       f"{cube.sizes['y']}x{cube.sizes['x']} EPSG:{grid[0]}", flush=True)
+    if debug:
+        print(f"landsat: {cube.sizes['time']} scenes, grid "
+              f"{cube.sizes['y']}x{cube.sizes['x']} EPSG:{grid[0]}", flush=True)
     return cube
 
 
@@ -122,7 +152,7 @@ def lazy_fetch_and_composite(
         if debug: print(f"debug [_fetch_year]: fetching landsat for year {y}", flush=True)
         t_search = time.perf_counter() if debug else 0.0
         items = _search(bbox, f"{y}-01-01", f"{y + 1}-01-01",
-                        max_cloud, start_day, end_day)
+                        max_cloud, start_day, end_day, aws=True)
 
         if len(items) == 0:
             return []

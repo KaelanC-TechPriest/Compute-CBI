@@ -69,7 +69,7 @@ def main() -> int:
               flush=True)
 
     cube = fetch_landsat(fire["bbox"], fire["year"], fire["start_day"],
-                         fire["end_day"], args.max_cloud)
+                         fire["end_day"], args.max_cloud, aws=True)
     comp = composite(cube, fire["year"])
     stack = build_stack(comp, def_path)
     ds = predict(stack, bundle)
