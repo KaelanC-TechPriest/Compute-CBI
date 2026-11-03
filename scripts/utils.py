@@ -34,7 +34,6 @@ MODEL_PATH = REPO / "data/model/cbi_rf.joblib"
 DEF_TIF = REPO / "data/terraclimate/def_19812010_annual.tif"
 DEF_NC = REPO / "data/terraclimate/TerraClimate_19812010_def.nc"
 TRAIN_CSV = REPO / "parks_2019/data/data_for_ee_model.csv"
-LANDSAT_CACHE = REPO / "data/landsat_cache"
 
 # --------------------------------------------------------------------------- model
 PREDICTORS = ["def", "lat", "rbr", "dmirbi", "dndvi", "post_mirbi"]
@@ -211,38 +210,6 @@ def fire_grid(bbox):
 
 
 # ====================================================================== landsat
-_scene_cache_stats = {"hits": 0, "misses": 0}
-
-
-def get_scene_cache_path(cache_dir: Path, item) -> Path:
-    scene_id = item.properties.get("landsat:scene_id") or item.id
-    return cache_dir / "scenes" / f"{scene_id}.tif"
-
-
-def raw_scene_path(cache_dir: Path, item, state: str) -> Path:
-    scene_id = item.properties.get("landsat:scene_id") or item.id
-    return cache_dir / "raw" / state / f"{scene_id}.tif"
-
-
-def load_or_download_scene(item, cache_dir: Path, grid, raw_path: Path | None = None):
-    """Return processed scene for the fire grid, loading from cache when possible."""
-    g_epsg, g_tr, g_w, g_h = grid
-    cache_path = get_scene_cache_path(cache_dir, item)
-    if cache_path.is_file():
-        with rasterio.open(cache_path) as ds:
-            if ds.crs is not None and ds.crs.to_epsg() == g_epsg and ds.transform == g_tr:
-                _scene_cache_stats["hits"] += 1
-                da = rioxarray.open_rasterio(cache_path, masked=True)
-                return da.assign_coords(band=OPTICAL).drop_vars("spatial_ref", errors="ignore")
-
-    _scene_cache_stats["misses"] += 1
-    result = _item_window(item, grid, raw_path=raw_path, aws=False)
-    if result is not None:
-        cache_path.parent.mkdir(parents=True, exist_ok=True)
-        result.rio.write_crs(f"EPSG:{g_epsg}").rio.to_raster(
-            cache_path, tiled=True, compress="ZSTD", zstd_level=1)
-    return result
-
 
 def _search(bbox, start, end, max_cloud, start_day, end_day, aws=False) -> List[Item]:
     """Search Planetary Computer STAC for Landsat C2 L2 items over a fire bbox.
@@ -290,54 +257,8 @@ def _search(bbox, start, end, max_cloud, start_day, end_day, aws=False) -> List[
     return items
 
 
-def _download_raw_scene(item, bbox_4326, out_path: Path) -> bool:
-    """Download the bbox window of a scene in its native projection as a multi-band GeoTIFF.
-
-    Returns True if the file was written, False if the scene doesn't overlap bbox.
-    """
-    epsg = int(item.properties["proj:code"].split(":")[1])
-    tr = item.properties["proj:transform"]
-    sh = item.properties["proj:shape"]
-    H, W = int(sh[0]), int(sh[1])
-    A = Affine(*tr[:6])
-
-    w, s, e, n = bbox_4326
-    minx, miny, maxx, maxy = transform_bounds("EPSG:4326", f"EPSG:{epsg}", w, s, e, n)
-    c0 = max(0, math.floor((minx - A.c) / A.a))
-    c1 = min(W, math.ceil((maxx - A.c) / A.a))
-    r0 = max(0, math.floor((maxy - A.f) / A.e))
-    r1 = min(H, math.ceil((miny - A.f) / A.e))
-    if c1 <= c0 or r1 <= r0:
-        return False
-
-    win = Window(c0, r0, c1 - c0, r1 - r0)  # type: ignore[call-arg]
-    wtr: Affine = A * Affine.translation(c0, r0)  # type: ignore[assignment]
-
-    arrays = []
-    with rasterio.Env(**_GDAL_ENV_PC):  # type: ignore[arg-type]
-        for band in BANDS:
-            with rasterio.open(item.assets[band].href.removeprefix("/vsicurl/")) as ds:
-                arrays.append(ds.read(1, window=win))
-
-    h, w_px = arrays[0].shape
-    out_path.parent.mkdir(parents=True, exist_ok=True)
-    tmp = out_path.with_suffix(".tmp.tif")
-    with rasterio.open(
-        tmp, "w", driver="GTiff",
-        count=len(BANDS), dtype=arrays[0].dtype,
-        crs=f"EPSG:{epsg}", transform=wtr,
-        width=w_px, height=h,
-        tiled=True, compress="ZSTD", zstd_level=1,
-    ) as ds:
-        for i, arr in enumerate(arrays, start=1):
-            ds.write(arr, i)
-    tmp.replace(out_path)
-    return True
-
-
 def _item_window(item: pystac.Item, grid: tuple[int, Affine, int, int],
-                 raw_path: Path | None = None, debug=False, aws=False
-                 ) -> xr.DataArray | None:
+                 debug=False, aws=False) -> xr.DataArray | None:
     """Read one Landsat item over the fire grid: window, scale, QA-mask, reproject.
 
     Computes the overlap of ``grid`` with the item's native CRS/transform, reads
@@ -352,9 +273,6 @@ def _item_window(item: pystac.Item, grid: tuple[int, Affine, int, int],
             and band assets named in ``BANDS``.
         grid: Target grid as ``(epsg, Affine, width, height)`` from
             ``fire_grid`` (30 m UTM).
-        raw_path: Unused (kept for call-site compatibility with the old
-            on-disk raw-cache path). Reading from a cached multi-band GeoTIFF
-            is not implemented in this merged version.
         debug: If ``True``, print band-read and reproject timings.
         aws: If ``True``, use S3/``/vsis3/`` + AWS GDAL env; if ``False``
             (default), use Planetary Computer-style HTTPS reads.
